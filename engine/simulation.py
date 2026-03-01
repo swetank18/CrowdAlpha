@@ -42,6 +42,7 @@ from engine.crowding.alpha_decay import AlphaDecay
 from engine.analytics.diagnostics import Diagnostics
 from engine.analytics.regime_detector import RegimeDetector
 from engine.analytics.fragility import FragilityIndex
+from engine.events import EventType, make_event
 
 
 # ---------------------------------------------------------------------------
@@ -91,24 +92,24 @@ class TickState:
     decay_data:     Dict        # alpha decay snapshot
 
     def to_ws_event(self) -> Dict:
-        return {
-            "type":      "TICK",
-            "timestamp": self.timestamp,
-            "payload": {
-                "tick":        self.tick,
-                "mid_price":   self.mid_price,
-                "spread":      self.spread,
-                "vwap":        self.vwap,
-                "volatility":  self.volatility,
-                "regime":      self.regime,
-                "lfi":         self.lfi,
-                "lfi_alert":   self.lfi_alert,
-                "crowding":    self.crowding,
-                "order_book":  self.order_book,
+        return make_event(
+            EventType.TICK,
+            {
+                "tick": self.tick,
+                "mid_price": self.mid_price,
+                "spread": self.spread,
+                "vwap": self.vwap,
+                "volatility": self.volatility,
+                "regime": self.regime,
+                "lfi": self.lfi,
+                "lfi_alert": self.lfi_alert,
+                "crowding": self.crowding,
+                "order_book": self.order_book,
                 "recent_fills": self.recent_fills,
                 "agent_stats": self.agent_stats,
-            }
-        }
+            },
+            timestamp=self.timestamp,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -161,10 +162,11 @@ class Simulation:
         self._price_history: List[float] = []
         self._vwap_num:      float       = 0.0
         self._vwap_den:      float       = 0.0
-        self._prev_mid:      Optional[float] = None
 
         # Latest state (for API polling)
         self._last_state:    Optional[TickState] = None
+        self._last_events:   List[Dict[str, Any]] = []
+        self._last_regime:   Optional[str] = None
 
         # Callback for WebSocket broadcast
         self._broadcast: Optional[Callable] = None
@@ -187,6 +189,14 @@ class Simulation:
     def current_state(self) -> Optional[TickState]:
         return self._last_state
 
+    @property
+    def latest_events(self) -> List[Dict[str, Any]]:
+        return list(self._last_events)
+
+    @property
+    def trade_history(self) -> List[Dict[str, Any]]:
+        return list(self._trade_tape)
+
     # ------------------------------------------------------------------
     # Blocking run (script / test mode)
     # ------------------------------------------------------------------
@@ -198,7 +208,7 @@ class Simulation:
         for _ in range(n_ticks):
             if not self._running:
                 break
-            state = self._tick_once()
+            state, _ = self._tick_once()
             states.append(state)
             if print_prices:
                 print(
@@ -233,12 +243,12 @@ class Simulation:
             if self.config.max_ticks and self._tick >= self.config.max_ticks:
                 break
 
-            state = self._tick_once()
+            state, events = self._tick_once()
 
             if self._broadcast:
                 try:
-                    event = state.to_ws_event()
-                    await self._broadcast(event)
+                    for event in events:
+                        await self._broadcast(event)
                 except Exception:
                     pass
 
@@ -251,7 +261,7 @@ class Simulation:
     # Single tick
     # ------------------------------------------------------------------
 
-    def _tick_once(self) -> TickState:
+    def _tick_once(self) -> tuple[TickState, List[Dict[str, Any]]]:
         self._tick += 1
         tick = self._tick
         self._recent_fills.clear()
@@ -269,6 +279,15 @@ class Simulation:
         vol = self._rolling_vol()
         impact_buy_mult, impact_sell_mult = self.alpha_decay.current_impact_multipliers()
         self.execution_engine.impact.set_side_multipliers(impact_buy_mult, impact_sell_mult)
+
+        pre_agent_state: Dict[str, Dict[str, float]] = {
+            aid: {
+                "cash": float(pos.cash),
+                "inventory": float(pos.inventory),
+                "pnl": float(pos.mark_to_market(mid)),
+            }
+            for aid, pos in self.execution_engine.positions.items()
+        }
 
         # --- 2. Collect orders from all agents ---
         all_orders: List[Order] = []
@@ -311,6 +330,7 @@ class Simulation:
         self._recent_fills = fills
         fill_dicts = [
             {
+                "tick": tick,
                 "price": f.price,
                 "qty": f.qty,
                 "buy_agent": f.buy_agent_id[:8],
@@ -345,6 +365,9 @@ class Simulation:
             if len(self._price_history) > 1000:
                 self._price_history.pop(0)
 
+        # Post-trade book snapshot for analytics and API state.
+        snap_post = self.book.depth_snapshot(n_levels=10)
+
         # --- 8. Crowding pipeline ---
         agent_ids = [a.agent_id for a in self.agents]
         F = self.factor_space.update(
@@ -370,24 +393,29 @@ class Simulation:
         )
 
         # --- 9. Analytics ---
-        self.diagnostics.update(self.agents)
-        book_depth = sum(q for _, q in snap["bids"]) + sum(q for _, q in snap["asks"])
-        regime = self.regime_detector.update(
-            tick             = tick,
-            mid_price        = current_mid,
-            spread           = self.book.spread,
-            fills_this_tick  = len(fills),
-            book_depth       = float(book_depth),
-            prev_mid         = self._prev_mid,
+        self.diagnostics.update(
+            agents=self.agents,
+            fills=fills,
+            mid_pre=mid,
+            mid_post=current_mid,
         )
+        book_depth = sum(q for _, q in snap_post["bids"]) + sum(q for _, q in snap_post["asks"])
         lfi = self.fragility.update(
-            tick       = tick,
-            spread     = self.book.spread,
-            depth      = float(book_depth),
-            fill_count = len(fills),
+            tick=tick,
+            bid_levels=snap_post["bids"],
+            ask_levels=snap_post["asks"],
+            mid_price=current_mid,
+            fills=fills,
         )
-        self._prev_mid = current_mid
-
+        regime = self.regime_detector.update(
+            tick=tick,
+            mid_price=current_mid,
+            spread=self.book.spread,
+            depth=float(book_depth),
+            lfi=lfi,
+            crowding=intensity,
+            fill_imbalance=self.fragility.fill_imbalance,
+        )
         # --- 10. Assemble TickState ---
 
         state = TickState(
@@ -401,7 +429,7 @@ class Simulation:
             lfi            = round(lfi, 4),
             lfi_alert      = self.fragility.alert_level,
             crowding       = round(intensity, 4),
-            order_book     = snap,
+            order_book     = snap_post,
             recent_fills   = fill_dicts,
             agent_stats    = self.diagnostics.snapshot_all(self.agents),
             crowding_data  = self.crowding_matrix.snapshot_for_api(),
@@ -409,11 +437,158 @@ class Simulation:
             decay_data     = self.alpha_decay.snapshot_for_api(),
         )
         self._last_state = state
-        return state
+        events = self._build_tick_events(
+            tick=tick,
+            timestamp=state.timestamp,
+            all_orders=all_orders,
+            fills=fills,
+            mid_pre=mid,
+            mid_post=current_mid,
+            spread_pre=snap.get("spread"),
+            spread_post=snap_post.get("spread"),
+            pre_agent_state=pre_agent_state,
+            post_agent_state=self.execution_engine.snapshot(current_mid),
+            crowding_snapshot=state.crowding_data,
+            regime_value=state.regime,
+            tick_event=state.to_ws_event(),
+        )
+        self._last_events = events
+        return state, events
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _build_tick_events(
+        self,
+        tick: int,
+        timestamp: int,
+        all_orders: List[Order],
+        fills: List[Fill],
+        mid_pre: float,
+        mid_post: float,
+        spread_pre: Optional[float],
+        spread_post: Optional[float],
+        pre_agent_state: Dict[str, Dict[str, float]],
+        post_agent_state: List[Dict[str, Any]],
+        crowding_snapshot: Dict[str, Any],
+        regime_value: str,
+        tick_event: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        events: List[Dict[str, Any]] = []
+
+        for order in all_orders:
+            events.append(
+                make_event(
+                    EventType.ORDER_SUBMITTED,
+                    {
+                        "tick": tick,
+                        "order_id": order.order_id,
+                        "agent_id": order.agent_id,
+                        "side": order.side.value,
+                        "order_type": order.order_type.value,
+                        "price": round(float(order.price), 6),
+                        "qty": int(order.qty),
+                        "cancel_target": order.cancel_target,
+                    },
+                    timestamp=order.timestamp,
+                )
+            )
+
+        for fill in fills:
+            events.append(
+                make_event(
+                    EventType.ORDER_FILLED,
+                    {
+                        "tick": tick,
+                        "buy_order_id": fill.buy_order_id,
+                        "sell_order_id": fill.sell_order_id,
+                        "buy_agent_id": fill.buy_agent_id,
+                        "sell_agent_id": fill.sell_agent_id,
+                        "price": round(float(fill.price), 6),
+                        "qty": int(fill.qty),
+                    },
+                    timestamp=fill.timestamp,
+                )
+            )
+
+        if abs(mid_post - mid_pre) > 1e-12 or self._norm_spread(spread_pre) != self._norm_spread(spread_post):
+            events.append(
+                make_event(
+                    EventType.PRICE_UPDATED,
+                    {
+                        "tick": tick,
+                        "prev_mid_price": round(float(mid_pre), 6),
+                        "mid_price": round(float(mid_post), 6),
+                        "prev_spread": self._norm_spread(spread_pre),
+                        "spread": self._norm_spread(spread_post),
+                    },
+                    timestamp=timestamp,
+                )
+            )
+
+        changed_agents: List[Dict[str, Any]] = []
+        for cur in post_agent_state:
+            aid = str(cur["agent_id"])
+            prev = pre_agent_state.get(aid)
+            cash = float(cur.get("cash", 0.0))
+            inv = int(cur.get("inventory", 0))
+            pnl = float(cur.get("pnl", 0.0))
+            if prev is None:
+                changed_agents.append(cur)
+                continue
+            if (
+                abs(cash - prev["cash"]) > 1e-9
+                or abs(float(inv) - prev["inventory"]) > 1e-9
+                or abs(pnl - prev["pnl"]) > 1e-9
+            ):
+                changed_agents.append(cur)
+
+        if changed_agents:
+            events.append(
+                make_event(
+                    EventType.AGENT_STATE_CHANGED,
+                    {"tick": tick, "agents": changed_agents},
+                    timestamp=timestamp,
+                )
+            )
+
+        events.append(
+            make_event(
+                EventType.CROWDING_MATRIX_UPDATED,
+                {
+                    "tick": tick,
+                    "crowding_intensity": crowding_snapshot.get("crowding_intensity", 0.0),
+                    "agent_ids": crowding_snapshot.get("agent_ids", []),
+                    "matrix": crowding_snapshot.get("matrix", []),
+                    "top_crowded_pairs": crowding_snapshot.get("top_crowded_pairs", []),
+                },
+                timestamp=timestamp,
+            )
+        )
+
+        if self._last_regime is None or regime_value != self._last_regime:
+            events.append(
+                make_event(
+                    EventType.REGIME_CHANGED,
+                    {
+                        "tick": tick,
+                        "prev_regime": self._last_regime,
+                        "regime": regime_value,
+                    },
+                    timestamp=timestamp,
+                )
+            )
+        self._last_regime = regime_value
+
+        events.append(tick_event)
+        return events
+
+    @staticmethod
+    def _norm_spread(spread: Optional[float]) -> Optional[float]:
+        if spread is None:
+            return None
+        return round(float(spread), 6)
 
     def _on_fill(self, fill: Fill) -> None:
         self._recent_fills.append(fill)

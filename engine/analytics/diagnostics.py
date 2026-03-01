@@ -1,143 +1,221 @@
 """
 engine/analytics/diagnostics.py
 
-Per-agent performance diagnostics: Sharpe, Sortino, max drawdown,
-skewness, kurtosis, hit rate, average fill size.
-
-All metrics operate on per-tick PnL histories streamed from simulation.py.
-Designed to be called each tick (cheap incremental updates) or on-demand.
+Trade-stream diagnostics computed from observable fills and mark-to-market path.
 """
 
 from __future__ import annotations
 
-import math
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
+
 import numpy as np
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any, TYPE_CHECKING
+
+from engine.core.order import Fill
 
 if TYPE_CHECKING:
     from engine.agents.base_agent import BaseAgent
 
 
-# ---------------------------------------------------------------------------
-# Agent diagnostics snapshot
-# ---------------------------------------------------------------------------
-
 @dataclass
 class AgentDiagnostics:
-    agent_id:      str
+    agent_id: str
     strategy_type: str
-    pnl:           float = 0.0
-    sharpe:        Optional[float] = None
-    sortino:       Optional[float] = None
-    max_drawdown:  float = 0.0
-    skewness:      float = 0.0
-    kurtosis:      float = 0.0
-    hit_rate:      float = 0.0     # fraction of ticks with positive return
+    pnl: float = 0.0
+    sharpe: Optional[float] = None
+    sortino: Optional[float] = None
+    max_drawdown: float = 0.0
+    turnover: float = 0.0
+    spread_cost: float = 0.0
+    market_impact_cost: float = 0.0
+    kurtosis: float = 0.0
+    vol_autocorr: float = 0.0
+    hit_rate: float = 0.0
     avg_fill_size: float = 0.0
-    fill_count:    int   = 0
-    inventory:     int   = 0
+    fill_count: int = 0
+    inventory: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "agent_id":      self.agent_id,
+            "agent_id": self.agent_id,
             "strategy_type": self.strategy_type,
-            "pnl":           round(self.pnl, 2),
-            "sharpe":        round(self.sharpe, 4) if self.sharpe else None,
-            "sortino":       round(self.sortino, 4) if self.sortino else None,
-            "max_drawdown":  round(self.max_drawdown, 4),
-            "skewness":      round(self.skewness, 4),
-            "kurtosis":      round(self.kurtosis, 4),
-            "hit_rate":      round(self.hit_rate, 4),
+            "pnl": round(self.pnl, 2),
+            "sharpe": round(self.sharpe, 4) if self.sharpe is not None else None,
+            "sortino": round(self.sortino, 4) if self.sortino is not None else None,
+            "max_drawdown": round(self.max_drawdown, 4),
+            "turnover": round(self.turnover, 4),
+            "spread_cost": round(self.spread_cost, 4),
+            "market_impact_cost": round(self.market_impact_cost, 4),
+            "kurtosis": round(self.kurtosis, 4),
+            "vol_autocorr": round(self.vol_autocorr, 4),
+            "hit_rate": round(self.hit_rate, 4),
             "avg_fill_size": round(self.avg_fill_size, 2),
-            "fill_count":    self.fill_count,
-            "inventory":     self.inventory,
+            "fill_count": self.fill_count,
+            "inventory": self.inventory,
         }
 
 
-# ---------------------------------------------------------------------------
-# Diagnostics engine
-# ---------------------------------------------------------------------------
-
 class Diagnostics:
-
-    RISK_FREE = 0.0   # per-tick risk-free rate
-
-    def __init__(self) -> None:
+    def __init__(self, window: int = 250) -> None:
+        self.window = max(30, window)
+        self._cash: Dict[str, float] = {}
+        self._inventory: Dict[str, int] = {}
         self._pnl_history: Dict[str, List[float]] = {}
-        self._peak_pnl:    Dict[str, float]       = {}
-        self._max_dd:      Dict[str, float]       = {}
+        self._trade_qty_history: Dict[str, List[float]] = {}
+        self._inv_abs_history: Dict[str, List[float]] = {}
+        self._spread_cost: Dict[str, float] = {}
+        self._impact_cost: Dict[str, float] = {}
+        self._fill_count: Dict[str, int] = {}
+        self._fill_qty: Dict[str, float] = {}
+        self._strategy_type: Dict[str, str] = {}
 
-    def update(self, agents: List["BaseAgent"]) -> None:
-        """Record current PnL for each agent. Called every tick."""
+    def update(
+        self,
+        agents: List["BaseAgent"],
+        fills: List[Fill],
+        mid_pre: float,
+        mid_post: float,
+    ) -> None:
         for agent in agents:
             aid = agent.agent_id
-            if aid not in self._pnl_history:
+            if aid not in self._cash:
+                self._cash[aid] = float(agent.initial_cash)
+                self._inventory[aid] = 0
                 self._pnl_history[aid] = []
-                self._peak_pnl[aid]    = agent.pnl
-                self._max_dd[aid]      = 0.0
+                self._trade_qty_history[aid] = []
+                self._inv_abs_history[aid] = []
+                self._spread_cost[aid] = 0.0
+                self._impact_cost[aid] = 0.0
+                self._fill_count[aid] = 0
+                self._fill_qty[aid] = 0.0
+            self._strategy_type[aid] = agent.strategy_type
 
-            self._pnl_history[aid].append(agent.pnl)
+        traded_this_tick: Dict[str, float] = {a.agent_id: 0.0 for a in agents}
+        mid_delta = float(mid_post - mid_pre)
 
-            # Rolling max drawdown
-            if agent.pnl > self._peak_pnl[aid]:
-                self._peak_pnl[aid] = agent.pnl
-            dd = self._peak_pnl[aid] - agent.pnl
-            if dd > self._max_dd[aid]:
-                self._max_dd[aid] = dd
+        for fill in fills:
+            buyer = fill.buy_agent_id
+            seller = fill.sell_agent_id
+            qty = int(fill.qty)
+            price = float(fill.price)
 
-            # Keep bounded
-            if len(self._pnl_history[aid]) > 1000:
+            for aid in (buyer, seller):
+                if aid not in self._cash:
+                    # Safety for agents not present in current list.
+                    self._cash[aid] = 100_000.0
+                    self._inventory[aid] = 0
+                    self._pnl_history[aid] = []
+                    self._trade_qty_history[aid] = []
+                    self._inv_abs_history[aid] = []
+                    self._spread_cost[aid] = 0.0
+                    self._impact_cost[aid] = 0.0
+                    self._fill_count[aid] = 0
+                    self._fill_qty[aid] = 0.0
+                    self._strategy_type.setdefault(aid, "unknown")
+                traded_this_tick.setdefault(aid, 0.0)
+
+            # Fill-accounting from trade stream.
+            self._cash[buyer] -= price * qty
+            self._inventory[buyer] += qty
+            self._cash[seller] += price * qty
+            self._inventory[seller] -= qty
+
+            traded_this_tick[buyer] += qty
+            traded_this_tick[seller] += qty
+            self._fill_count[buyer] += 1
+            self._fill_count[seller] += 1
+            self._fill_qty[buyer] += qty
+            self._fill_qty[seller] += qty
+
+            # Cost decomposition around observed pre/post mid.
+            self._spread_cost[buyer] += max(price - mid_pre, 0.0) * qty
+            self._spread_cost[seller] += max(mid_pre - price, 0.0) * qty
+            self._impact_cost[buyer] += max(mid_delta, 0.0) * qty
+            self._impact_cost[seller] += max(-mid_delta, 0.0) * qty
+
+        for aid in list(self._cash.keys()):
+            pnl = self._cash[aid] + self._inventory[aid] * mid_post
+            self._pnl_history.setdefault(aid, []).append(float(pnl))
+            self._trade_qty_history.setdefault(aid, []).append(float(traded_this_tick.get(aid, 0.0)))
+            self._inv_abs_history.setdefault(aid, []).append(float(abs(self._inventory[aid])))
+
+            if len(self._pnl_history[aid]) > self.window:
                 self._pnl_history[aid].pop(0)
+            if len(self._trade_qty_history[aid]) > self.window:
+                self._trade_qty_history[aid].pop(0)
+            if len(self._inv_abs_history[aid]) > self.window:
+                self._inv_abs_history[aid].pop(0)
 
     def compute(self, agent: "BaseAgent") -> AgentDiagnostics:
-        """Compute full diagnostics snapshot for one agent."""
         aid = agent.agent_id
-        history = self._pnl_history.get(aid, [])
+        return self.compute_by_id(aid, fallback_strategy=agent.strategy_type)
 
+    def compute_by_id(self, agent_id: str, fallback_strategy: str = "unknown") -> AgentDiagnostics:
+        hist = self._pnl_history.get(agent_id, [])
+        strategy = self._strategy_type.get(agent_id, fallback_strategy)
         diag = AgentDiagnostics(
-            agent_id      = aid,
-            strategy_type = agent.strategy_type,
-            pnl           = agent.pnl,
-            fill_count    = getattr(agent, 'fill_count', 0),
-            inventory     = agent.inventory,
-            max_drawdown  = self._max_dd.get(aid, 0.0),
+            agent_id=agent_id,
+            strategy_type=strategy,
+            pnl=float(hist[-1]) if hist else 0.0,
+            fill_count=int(self._fill_count.get(agent_id, 0)),
+            inventory=int(self._inventory.get(agent_id, 0)),
+            spread_cost=float(self._spread_cost.get(agent_id, 0.0)),
+            market_impact_cost=float(self._impact_cost.get(agent_id, 0.0)),
+            avg_fill_size=(
+                float(self._fill_qty.get(agent_id, 0.0)) / max(float(self._fill_count.get(agent_id, 0)), 1.0)
+            ),
         )
 
-        if len(history) < 2:
+        if len(hist) < 3:
             return diag
 
-        arr = np.array(history)
-        returns = np.diff(arr)
-        if len(returns) == 0:
+        arr = np.array(hist, dtype=float)
+        rets = np.diff(arr)
+        if len(rets) < 2:
             return diag
 
-        mean_r = returns.mean()
-        std_r  = returns.std()
-
-        # Sharpe
+        mean_r = float(np.mean(rets))
+        std_r = float(np.std(rets))
         if std_r > 1e-9:
-            diag.sharpe = float((mean_r - self.RISK_FREE) / std_r)
+            diag.sharpe = mean_r / std_r
 
-        # Sortino (downside deviation only)
-        downside = returns[returns < 0]
-        if len(downside) > 0:
-            down_std = downside.std()
+        downside = rets[rets < 0.0]
+        if len(downside) > 1:
+            down_std = float(np.std(downside))
             if down_std > 1e-9:
-                diag.sortino = float((mean_r - self.RISK_FREE) / down_std)
+                diag.sortino = mean_r / down_std
 
-        # Skewness and excess kurtosis
-        if std_r > 1e-9 and len(returns) >= 3:
-            diag.skewness = float(((returns - mean_r) ** 3).mean() / std_r ** 3)
-            diag.kurtosis = float(((returns - mean_r) ** 4).mean() / std_r ** 4 - 3)
+        equity = arr
+        running_max = np.maximum.accumulate(equity)
+        dd = running_max - equity
+        diag.max_drawdown = float(np.max(dd)) if len(dd) else 0.0
 
-        # Hit rate
-        diag.hit_rate = float((returns > 0).mean())
+        diag.hit_rate = float(np.mean(rets > 0.0))
+
+        if len(rets) >= 4 and std_r > 1e-9:
+            centered = rets - mean_r
+            m2 = float(np.mean(centered**2))
+            m4 = float(np.mean(centered**4))
+            diag.kurtosis = (m4 / (m2 * m2) - 3.0) if m2 > 1e-12 else 0.0
+
+        abs_rets = np.abs(rets)
+        if len(abs_rets) >= 3:
+            x = abs_rets[:-1]
+            y = abs_rets[1:]
+            if float(np.std(x)) > 1e-12 and float(np.std(y)) > 1e-12:
+                diag.vol_autocorr = float(np.corrcoef(x, y)[0, 1])
+
+        qty_hist = np.array(self._trade_qty_history.get(agent_id, []), dtype=float)
+        inv_hist = np.array(self._inv_abs_history.get(agent_id, []), dtype=float)
+        if len(qty_hist) > 0 and len(inv_hist) > 0:
+            avg_qty = float(np.mean(qty_hist))
+            avg_inv = float(np.mean(inv_hist))
+            diag.turnover = avg_qty / max(avg_inv, 1.0)
 
         return diag
 
-    def snapshot_all(self, agents: List["BaseAgent"]) -> List[Dict]:
-        """Compute diagnostics for all agents, sorted by Sharpe desc."""
-        diags = [self.compute(a).to_dict() for a in agents]
-        diags.sort(key=lambda d: (d["sharpe"] or -999), reverse=True)
-        return diags
+    def snapshot_all(self, agents: List["BaseAgent"]) -> List[Dict[str, Any]]:
+        out = [self.compute(agent).to_dict() for agent in agents]
+        out.sort(key=lambda x: (x["sharpe"] if x["sharpe"] is not None else -999.0), reverse=True)
+        return out
+

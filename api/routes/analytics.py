@@ -50,3 +50,27 @@ def get_fragility(request: Request):
     """Current LFI score, alert level, and history."""
     sim = _get_sim(request)
     return sim.fragility.snapshot_for_api()
+
+
+@router.get("/snapshot")
+def get_analytics_snapshot(request: Request):
+    """Single-call analytics payload for dashboard hydration."""
+    sim = _get_sim(request)
+    state = sim.current_state
+    return {
+        "tick": state.tick if state else 0,
+        "market": {
+            "mid_price": state.mid_price if state else None,
+            "spread": state.spread if state else None,
+            "volatility": state.volatility if state else 0.0,
+            "regime": state.regime if state else None,
+            "lfi": state.lfi if state else 0.0,
+            "crowding": state.crowding if state else 0.0,
+        },
+        "agent_diagnostics": sim.diagnostics.snapshot_all(sim.agents),
+        "crowding": sim.crowding_matrix.snapshot_for_api(),
+        "factor_space": sim.factor_space.snapshot_for_api(),
+        "alpha_decay": sim.alpha_decay.snapshot_for_api(),
+        "regime": sim.regime_detector.snapshot_for_api(),
+        "fragility": sim.fragility.snapshot_for_api(),
+    }

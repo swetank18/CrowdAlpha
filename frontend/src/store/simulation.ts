@@ -38,7 +38,7 @@ export interface SimState {
     spread: number | null;
     vwap: number;
     volatility: number;
-    regime: "CALM" | "TRENDING" | "UNSTABLE" | "CRASH" | null;
+    regime: "CALM" | "TRENDING" | "UNSTABLE" | "CRASH" | "CRASH_PRONE" | null;
     lfi: number;
     lfi_alert: "NORMAL" | "WARNING" | "DANGER" | "CRITICAL";
     crowding: number;

@@ -25,13 +25,14 @@ def get_order_book(request: Request, levels: int = 10):
 
 
 @router.get("/trades")
-def get_recent_trades(request: Request):
-    """Return recent fill history from last tick state."""
+def get_recent_trades(request: Request, limit: int = 200, since_tick: int = 0):
+    """Return historical fills from the in-memory trade tape."""
     sim = _get_sim(request)
-    state = sim.current_state
-    if state is None:
-        return {"fills": []}
-    return {"fills": state.recent_fills}
+    limit = max(1, min(limit, 5000))
+    tape = sim.trade_history
+    if since_tick > 0:
+        tape = [t for t in tape if int(t.get("tick", 0)) >= since_tick]
+    return {"fills": tape[-limit:]}
 
 
 @router.get("/metrics")

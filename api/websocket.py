@@ -18,6 +18,7 @@ import json
 from typing import Set
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from engine.events import EventType, make_event
 
 router = APIRouter()
 
@@ -60,6 +61,35 @@ manager = ConnectionManager()
 
 
 # ---------------------------------------------------------------------------
+# Event schema
+# ---------------------------------------------------------------------------
+
+@router.get("/ws/schema")
+def ws_schema():
+    """WebSocket event contract used by the frontend."""
+    base = {
+        "schema_version": "int",
+        "type": "string",
+        "timestamp": "int(ns)",
+        "payload": "object",
+    }
+    return {
+        "base_message": base,
+        "event_types": [e.value for e in EventType],
+        "payloads": {
+            "ORDER_SUBMITTED": "tick, order_id, agent_id, side, order_type, price, qty, cancel_target",
+            "ORDER_FILLED": "tick, buy_order_id, sell_order_id, buy_agent_id, sell_agent_id, price, qty",
+            "PRICE_UPDATED": "tick, prev_mid_price, mid_price, prev_spread, spread",
+            "AGENT_STATE_CHANGED": "tick, agents[]",
+            "CROWDING_MATRIX_UPDATED": "tick, crowding_intensity, agent_ids, matrix, top_crowded_pairs",
+            "REGIME_CHANGED": "tick, prev_regime, regime",
+            "TICK": "tick, mid_price, spread, vwap, volatility, regime, lfi, lfi_alert, crowding, order_book, recent_fills, agent_stats",
+            "HEARTBEAT": "message|n_connected",
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
 # WebSocket endpoint
 # ---------------------------------------------------------------------------
 
@@ -74,10 +104,17 @@ async def market_ws(websocket: WebSocket):
                 data = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
                 # Echo pings back
                 if data == "ping":
-                    await websocket.send_text("pong")
+                    await websocket.send_text(json.dumps(make_event(EventType.HEARTBEAT, {"message": "pong"})))
             except asyncio.TimeoutError:
                 # Send heartbeat
-                await websocket.send_text(json.dumps({"type": "HEARTBEAT"}))
+                await websocket.send_text(
+                    json.dumps(
+                        make_event(
+                            EventType.HEARTBEAT,
+                            {"n_connected": manager.n_connected},
+                        )
+                    )
+                )
     except WebSocketDisconnect:
         pass
     finally:

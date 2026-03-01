@@ -28,6 +28,7 @@
   .regime-TRENDING { @apply bg-blue-900/50 text-blue-300; }
   .regime-UNSTABLE { @apply bg-yellow-900/50 text-yellow-300; }
   .regime-CRASH    { @apply bg-red-900/50 text-red-300; }
+  .regime-CRASH_PRONE { @apply bg-red-900/50 text-red-300; }
 
   .lfi-NORMAL   { @apply bg-green-900/50 text-green-300; }
   .lfi-WARNING  { @apply bg-yellow-900/50 text-yellow-300; }
