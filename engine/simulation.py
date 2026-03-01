@@ -65,6 +65,7 @@ class SimulationConfig:
     initial_price:    float = 100.0
     initial_cash:     float = 100_000.0
     eta:              float = 0.01    # market impact coefficient
+    crowding_kappa:   float = 18.0    # impact amplification sensitivity to agent crowding
     seed:             Optional[int]  = None
 
 
@@ -285,7 +286,10 @@ class Simulation:
 
         vol = self._rolling_vol()
         impact_buy_mult, impact_sell_mult = self.alpha_decay.current_impact_multipliers()
+        agent_impact_mult = self.crowding_matrix.impact_multipliers(self.config.crowding_kappa)
+        agent_crowding = self.crowding_matrix.agent_intensity_map
         self.execution_engine.impact.set_side_multipliers(impact_buy_mult, impact_sell_mult)
+        self.execution_engine.impact.set_agent_multipliers(agent_impact_mult)
 
         pre_agent_state: Dict[str, Dict[str, float]] = {
             aid: {
@@ -315,9 +319,11 @@ class Simulation:
                 volatility    = vol,
                 vwap          = self._vwap(),
                 crowding_intensity = self.crowding_matrix.intensity,
+                agent_crowding_intensity = float(agent_crowding.get(agent.agent_id, 0.0)),
                 crowding_side_pressure = self.alpha_decay.side_pressure,
                 impact_buy_mult = impact_buy_mult,
                 impact_sell_mult = impact_sell_mult,
+                agent_impact_mult = float(agent_impact_mult.get(agent.agent_id, 1.0)),
             )
             try:
                 orders = agent.generate_orders(mstate)
@@ -396,6 +402,7 @@ class Simulation:
             crowding_intensity=intensity,
             agents=self.agents,
             agent_activity=self.factor_space.latest_activity_map(),
+            crowding_by_agent=self.crowding_matrix.agent_intensity_map,
             order_flow_imbalance=self._order_flow_imbalance(all_orders),
         )
 
@@ -568,6 +575,7 @@ class Simulation:
                     "crowding_intensity": crowding_snapshot.get("crowding_intensity", 0.0),
                     "agent_ids": crowding_snapshot.get("agent_ids", []),
                     "matrix": crowding_snapshot.get("matrix", []),
+                    "agent_crowding_intensity": crowding_snapshot.get("agent_crowding_intensity", {}),
                     "top_crowded_pairs": crowding_snapshot.get("top_crowded_pairs", []),
                 },
                 timestamp=timestamp,

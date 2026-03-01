@@ -85,19 +85,29 @@ class ImpactModel:
         self.eta = eta
         self.buy_multiplier = 1.0
         self.sell_multiplier = 1.0
+        self.agent_multipliers: Dict[str, float] = {}
 
     def set_side_multipliers(self, buy: float, sell: float) -> None:
         self.buy_multiplier = max(1.0, float(buy))
         self.sell_multiplier = max(1.0, float(sell))
 
-    def impact(self, qty: int, side: str) -> float:
+    def set_agent_multipliers(self, multipliers: Dict[str, float]) -> None:
+        clean: Dict[str, float] = {}
+        for agent_id, mult in multipliers.items():
+            clean[str(agent_id)] = max(0.1, float(mult))
+        self.agent_multipliers = clean
+
+    def impact(self, qty: int, side: str, agent_id: Optional[str] = None) -> float:
         """
         Returns the signed price impact of a trade.
         Positive for buys (cost more), negative for sells (receive less).
         """
+        agent_mult = 1.0
+        if agent_id is not None:
+            agent_mult = self.agent_multipliers.get(agent_id, 1.0)
         if side == "BID":
-            return self.eta * self.buy_multiplier * math.sqrt(qty)
-        return -self.eta * self.sell_multiplier * math.sqrt(qty)
+            return self.eta * self.buy_multiplier * agent_mult * math.sqrt(qty)
+        return -self.eta * self.sell_multiplier * agent_mult * math.sqrt(qty)
 
 
 # ---------------------------------------------------------------------------
@@ -128,8 +138,8 @@ class ExecutionEngine:
         seller = self.get_or_create(fill.sell_agent_id)
 
         # Impact adjustment: buyer pays a bit more, seller receives a bit less
-        buy_impact  = self.impact.impact(fill.qty, "BID")
-        sell_impact = self.impact.impact(fill.qty, "ASK")
+        buy_impact  = self.impact.impact(fill.qty, "BID", agent_id=fill.buy_agent_id)
+        sell_impact = self.impact.impact(fill.qty, "ASK", agent_id=fill.sell_agent_id)
 
         effective_buy_price  = fill.price + abs(buy_impact)
         effective_sell_price = fill.price - abs(sell_impact)

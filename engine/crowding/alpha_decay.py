@@ -42,6 +42,8 @@ class AlphaDecay:
         self._crowding_history: List[float] = []
         self._side_pressure_history: List[float] = []
         self._agent_crowding: Dict[str, List[float]] = {}
+        self._agent_exposure: Dict[str, List[float]] = {}
+        self._agent_exposure_cume: Dict[str, float] = {}
         self._agent_sharpe: Dict[str, List[float]] = {}
         self._params: Dict[str, DecayParams] = {}
 
@@ -54,6 +56,7 @@ class AlphaDecay:
         crowding_intensity: float,
         agents: List["BaseAgent"],
         agent_activity: Optional[Dict[str, float]] = None,
+        crowding_by_agent: Optional[Dict[str, float]] = None,
         order_flow_imbalance: float = 0.0,
     ) -> None:
         crowd = float(np.clip(crowding_intensity, -1.0, 1.0))
@@ -76,16 +79,23 @@ class AlphaDecay:
 
             agent_id = agent.agent_id
             a = float(np.clip(activity.get(agent_id, 0.0), 0.0, 1.0))
-            experienced = float(np.clip(max(crowd, 0.0) * (0.5 + 0.5 * a), 0.0, 1.0))
+            phi_i = float(crowding_by_agent.get(agent_id, crowd) if crowding_by_agent else crowd)
+            experienced = float(np.clip(max(phi_i, 0.0) * (0.5 + 0.5 * a), 0.0, 1.0))
 
             # Alpha proxy for exponential fit must be positive.
             alpha_proxy = max(float(sharpe), 1e-3)
 
             self._agent_crowding.setdefault(agent_id, []).append(experienced)
+            prev_exposure = float(self._agent_exposure_cume.get(agent_id, 0.0))
+            next_exposure = prev_exposure + max(experienced, 0.0)
+            self._agent_exposure_cume[agent_id] = next_exposure
+            self._agent_exposure.setdefault(agent_id, []).append(next_exposure)
             self._agent_sharpe.setdefault(agent_id, []).append(alpha_proxy)
 
             if len(self._agent_crowding[agent_id]) > 1000:
                 self._agent_crowding[agent_id].pop(0)
+            if len(self._agent_exposure[agent_id]) > 1000:
+                self._agent_exposure[agent_id].pop(0)
             if len(self._agent_sharpe[agent_id]) > 1000:
                 self._agent_sharpe[agent_id].pop(0)
 
@@ -111,12 +121,12 @@ class AlphaDecay:
 
     def _fit_all(self) -> None:
         for agent_id, s_hist in self._agent_sharpe.items():
-            c_hist = self._agent_crowding.get(agent_id, [])
-            n = min(len(s_hist), len(c_hist))
+            e_hist = self._agent_exposure.get(agent_id, [])
+            n = min(len(s_hist), len(e_hist))
             if n < self.min_samples:
                 continue
 
-            c = np.array(c_hist[-n:], dtype=float)
+            c = np.array(e_hist[-n:], dtype=float)
             s = np.array(s_hist[-n:], dtype=float)
 
             params = self._fit_exponential(agent_id, c, s)
@@ -165,10 +175,17 @@ class AlphaDecay:
         p = self._params.get(agent_id)
         if p is None:
             return []
-        xs = np.linspace(0.0, 1.0, n_points)
+        exposure_hist = self._agent_exposure.get(agent_id, [])
+        xmax = float(max(exposure_hist)) if exposure_hist else 1.0
+        xmax = max(1.0, xmax)
+        xs = np.linspace(0.0, xmax, n_points)
         ys = p.alpha_max * np.exp(-p.lambda_ * xs)
         return [
-            {"crowding": round(float(x), 4), "predicted_sharpe": round(float(y), 4)}
+            {
+                "crowding": round(float(x), 4),
+                "crowding_exposure": round(float(x), 4),
+                "predicted_sharpe": round(float(y), 4),
+            }
             for x, y in zip(xs, ys)
         ]
 
@@ -189,9 +206,9 @@ class AlphaDecay:
                     "half_life": p.half_life,
                     "r_squared": p.r_squared,
                     "n_samples": p.n_samples,
+                    "fit_basis": "cumulative_crowding_exposure",
                     "curve": self.decay_curve(p.agent_id, n_points=20),
                 }
                 for p in self._params.values()
             ],
         }
-

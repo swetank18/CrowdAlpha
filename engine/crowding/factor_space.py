@@ -44,6 +44,7 @@ class FactorSpace:
         self._current_matrix: Optional[np.ndarray] = None
         self._agent_ids: List[str] = []
         self._activity_map: Dict[str, float] = {}
+        self._volume_share_map: Dict[str, float] = {}
 
     def update(
         self,
@@ -72,12 +73,14 @@ class FactorSpace:
         return dict(self._activity_map)
 
     def activity_weights(self, agent_ids: List[str]) -> List[float]:
-        weights = [max(0.0, self._activity_map.get(agent_id, 0.0)) for agent_id in agent_ids]
+        if not agent_ids:
+            return []
+        weights = [max(0.0, self._volume_share_map.get(agent_id, 0.0)) for agent_id in agent_ids]
         total = float(sum(weights))
-        if total < 1e-9:
-            return [1.0 for _ in agent_ids]
-        n = max(1, len(agent_ids))
-        return [w * n / total for w in weights]
+        if total < 1e-12:
+            uniform = 1.0 / float(len(agent_ids))
+            return [uniform for _ in agent_ids]
+        return [w / total for w in weights]
 
     def current_matrix(self) -> Optional[np.ndarray]:
         return self._current_matrix
@@ -105,6 +108,7 @@ class FactorSpace:
                 "agent_id": agent_id,
                 "factors": dict(zip(FACTOR_NAMES, [float(x) for x in F[idx].tolist()])),
                 "activity": round(float(self._activity_map.get(agent_id, 0.0)), 4),
+                "volume_share": round(float(self._volume_share_map.get(agent_id, 0.0)), 6),
             }
             if pca is not None:
                 entry["pca"] = {"x": float(pca[idx, 0]), "y": float(pca[idx, 1])}
@@ -210,6 +214,7 @@ class FactorSpace:
                 "inventory_skew": float(np.clip(inv_skew, -1.0, 1.0)),
                 "order_aggressiveness": float(np.clip(order_aggr, 0.0, 1.0)),
                 "activity_raw": ord_qty + fill_qty,
+                "volume_raw": fill_qty,
             }
         return raw
 
@@ -224,6 +229,7 @@ class FactorSpace:
 
         turnover_vals = np.array([raw[a]["turnover_raw"] for a in agent_ids], dtype=float)
         activity_vals = np.array([raw[a]["activity_raw"] for a in agent_ids], dtype=float)
+        volume_vals = np.array([raw[a]["volume_raw"] for a in agent_ids], dtype=float)
 
         turn_scale = float(np.percentile(turnover_vals, 90)) if np.any(turnover_vals > 0) else 1.0
         act_scale = float(np.percentile(activity_vals, 90)) if np.any(activity_vals > 0) else 1.0
@@ -232,6 +238,9 @@ class FactorSpace:
 
         matrix_rows: List[np.ndarray] = []
         activity_map: Dict[str, float] = {}
+        volume_share_map: Dict[str, float] = {}
+        vol_total = float(np.sum(volume_vals))
+        n_agents = float(max(1, len(agent_ids)))
         for agent_id in agent_ids:
             r = raw[agent_id]
             turnover = float(np.clip(r["turnover_raw"] / turn_scale, 0.0, 1.0))
@@ -243,8 +252,13 @@ class FactorSpace:
 
             matrix_rows.append(np.array([turnover, holding, directional, vol_exp, inv_skew, aggr], dtype=float))
             activity_map[agent_id] = float(np.clip(r["activity_raw"] / act_scale, 0.0, 1.0))
+            if vol_total > 1e-12:
+                volume_share_map[agent_id] = float(max(0.0, r["volume_raw"]) / vol_total)
+            else:
+                volume_share_map[agent_id] = 1.0 / n_agents
 
         self._activity_map = activity_map
+        self._volume_share_map = volume_share_map
         return np.vstack(matrix_rows)
 
     def _vol_by_tick(self, tick: int) -> Dict[int, float]:
@@ -344,4 +358,3 @@ class FactorSpace:
             return 1.0
         rel = (ask - order.price) / spread
         return float(np.clip(rel, 0.0, 1.0))
-

@@ -44,9 +44,11 @@ class MarketState:
     volatility: float = 0.0
     vwap: float = 0.0
     crowding_intensity: float = 0.0
+    agent_crowding_intensity: float = 0.0
     crowding_side_pressure: float = 0.0
     impact_buy_mult: float = 1.0
     impact_sell_mult: float = 1.0
+    agent_impact_mult: float = 1.0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "bid_levels", tuple(self.bid_levels))

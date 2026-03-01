@@ -81,7 +81,7 @@ def ws_schema():
             "ORDER_FILLED": "tick, buy_order_id, sell_order_id, buy_agent_id, sell_agent_id, price, qty",
             "PRICE_UPDATED": "tick, prev_mid_price, mid_price, prev_spread, spread",
             "AGENT_STATE_CHANGED": "tick, agents[]",
-            "CROWDING_MATRIX_UPDATED": "tick, crowding_intensity, agent_ids, matrix, top_crowded_pairs",
+            "CROWDING_MATRIX_UPDATED": "tick, crowding_intensity, agent_ids, matrix, agent_crowding_intensity, top_crowded_pairs",
             "REGIME_CHANGED": "tick, prev_regime, regime",
             "TICK": "tick, mid_price, spread, vwap, volatility, regime, lfi, lfi_alert, crowding, order_book, recent_fills, agent_stats",
             "HEARTBEAT": "message|n_connected",

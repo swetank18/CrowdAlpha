@@ -94,6 +94,33 @@ def test_crowding_intensity_is_activity_weighted():
     assert pairs[0]["agent_b"] == "b"
 
 
+def test_agent_level_crowding_phi_matches_formula():
+    cm = CrowdingMatrix()
+    F = np.array(
+        [
+            [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            [-1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        ]
+    )
+    ids = ["a", "b", "c"]
+    cm.update(F, ids, activity_weights=[0.6, 0.3, 0.1])
+    phi = cm.agent_intensity_map
+
+    # Phi_i = (1/(N-1)) * sum_{j!=i} C_ij * w_j
+    # C from the chosen vectors:
+    # [ [1, 1,-1],
+    #   [1, 1,-1],
+    #   [-1,-1,1] ]
+    assert abs(phi["a"] - 0.1) < 1e-6      # (1*0.3 + -1*0.1)/2
+    assert abs(phi["b"] - 0.25) < 1e-6     # (1*0.6 + -1*0.1)/2
+    assert abs(phi["c"] + 0.45) < 1e-6     # (-1*0.6 + -1*0.3)/2
+
+    mult = cm.impact_multipliers(kappa=2.0, min_mult=0.2, max_mult=6.0)
+    assert mult["b"] > mult["a"] > 1.0
+    assert mult["c"] < 1.0
+
+
 def test_alpha_decay_fits_half_life_and_updates_side_multipliers():
     ad = AlphaDecay(min_samples=12)
     a1 = _SharpeStub("a1")
@@ -135,4 +162,3 @@ def test_alpha_decay_fits_half_life_and_updates_side_multipliers():
     )
     buy2, sell2 = ad.current_impact_multipliers()
     assert sell2 >= buy2 >= 1.0
-
