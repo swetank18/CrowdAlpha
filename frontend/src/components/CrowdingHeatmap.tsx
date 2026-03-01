@@ -20,88 +20,87 @@ function similarityToColor(similarity: number) {
   return `rgb(${r},${g},${b})`;
 }
 
+function getSquareSize(el: HTMLDivElement | null) {
+  if (!el) return 320;
+  return Math.max(220, Math.min(el.clientWidth, el.clientHeight || 400));
+}
+
 export const CrowdingHeatmap = memo(function CrowdingHeatmap() {
-  const { crowdingData, selectedPair, setSelectedPair } = useSimStore(
-    (s) => ({
-      crowdingData: s.crowding_data,
-      selectedPair: s.selected_pair,
-      setSelectedPair: s.setSelectedPair,
-    })
-  );
+  const { crowdingData, selectedPair, setSelectedPair } = useSimStore((s) => ({
+    crowdingData: s.crowding_data,
+    selectedPair: s.selected_pair,
+    setSelectedPair: s.setSelectedPair,
+  }));
 
   const data = useMemo(() => {
-    if (crowdingData && crowdingData.agent_ids.length > 0) {
-      return crowdingData;
-    }
+    if (crowdingData && crowdingData.agent_ids.length > 0) return crowdingData;
     return MOCK_CROWDING;
   }, [crowdingData]);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [size, setSize] = useState(320);
+  const sizeRef = useRef<number>(320);
   const [hover, setHover] = useState<HoverCell | null>(null);
 
   useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const resize = () => {
-      const next = Math.max(220, Math.min(el.clientWidth, el.clientHeight || 400));
-      setSize((prev) => (prev === next ? prev : next));
-    };
-    resize();
-    if (typeof ResizeObserver === "undefined") {
-      window.addEventListener("resize", resize);
-      return () => window.removeEventListener("resize", resize);
-    }
-    const observer = new ResizeObserver(resize);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
-
-  useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    const container = containerRef.current;
+    if (!canvas || !container) return;
     const n = data.agent_ids.length;
     if (n === 0) return;
 
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.floor(size * dpr);
-    canvas.height = Math.floor(size * dpr);
-    canvas.style.width = `${size}px`;
-    canvas.style.height = `${size}px`;
-
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, size, size);
 
-    const cell = size / n;
-    for (let i = 0; i < n; i += 1) {
-      for (let j = 0; j < n; j += 1) {
-        const value = data.matrix[i]?.[j] ?? 0;
-        ctx.fillStyle = similarityToColor(value);
-        ctx.fillRect(j * cell, i * cell, cell, cell);
-      }
-    }
+    const draw = () => {
+      const size = getSquareSize(container);
+      sizeRef.current = size;
+      const dpr = window.devicePixelRatio || 1;
 
-    const selectedA = selectedPair?.a;
-    const selectedB = selectedPair?.b;
-    if (selectedA && selectedB) {
-      const i = data.agent_ids.indexOf(selectedA);
-      const j = data.agent_ids.indexOf(selectedB);
-      if (i >= 0 && j >= 0) {
-        ctx.strokeStyle = "#f8fafc";
-        ctx.lineWidth = 2;
-        ctx.strokeRect(j * cell + 1, i * cell + 1, Math.max(cell - 2, 2), Math.max(cell - 2, 2));
-        ctx.strokeRect(i * cell + 1, j * cell + 1, Math.max(cell - 2, 2), Math.max(cell - 2, 2));
+      canvas.width = Math.floor(size * dpr);
+      canvas.height = Math.floor(size * dpr);
+      canvas.style.width = `${size}px`;
+      canvas.style.height = `${size}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, size, size);
+
+      const cell = size / n;
+      for (let i = 0; i < n; i += 1) {
+        for (let j = 0; j < n; j += 1) {
+          const value = data.matrix[i]?.[j] ?? 0;
+          ctx.fillStyle = similarityToColor(value);
+          ctx.fillRect(j * cell, i * cell, cell, cell);
+        }
       }
-    }
-  }, [data, size, selectedPair]);
+
+      const selectedA = selectedPair?.a;
+      const selectedB = selectedPair?.b;
+      if (selectedA && selectedB) {
+        const i = data.agent_ids.indexOf(selectedA);
+        const j = data.agent_ids.indexOf(selectedB);
+        if (i >= 0 && j >= 0) {
+          ctx.strokeStyle = "#f8fafc";
+          ctx.lineWidth = 2;
+          ctx.strokeRect(j * cell + 1, i * cell + 1, Math.max(cell - 2, 2), Math.max(cell - 2, 2));
+          ctx.strokeRect(i * cell + 1, j * cell + 1, Math.max(cell - 2, 2), Math.max(cell - 2, 2));
+        }
+      }
+    };
+
+    const raf = window.requestAnimationFrame(draw);
+    const onResize = () => draw();
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.cancelAnimationFrame(raf);
+      window.removeEventListener("resize", onResize);
+    };
+  }, [data, selectedPair]);
 
   const onPointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     const n = data.agent_ids.length;
     if (n === 0) return;
     const rect = event.currentTarget.getBoundingClientRect();
+    const size = sizeRef.current || rect.width || 320;
     const cell = size / n;
     const x = event.clientX - rect.left;
     const y = event.clientY - rect.top;
@@ -114,14 +113,11 @@ export const CrowdingHeatmap = memo(function CrowdingHeatmap() {
     setHover({ i, j, x, y });
   };
 
-  const onPointerLeave = () => {
-    setHover(null);
-  };
-
   const onPointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     const n = data.agent_ids.length;
     if (n === 0) return;
     const rect = event.currentTarget.getBoundingClientRect();
+    const size = sizeRef.current || rect.width || 320;
     const cell = size / n;
     const x = event.clientX - rect.left;
     const y = event.clientY - rect.top;
@@ -135,6 +131,7 @@ export const CrowdingHeatmap = memo(function CrowdingHeatmap() {
   };
 
   const hoveredValue = hover ? data.matrix[hover.i]?.[hover.j] ?? 0 : 0;
+  const size = sizeRef.current;
   const hoveredLeft = hover ? Math.min(Math.max(hover.x + 10, 8), size - 150) : 0;
   const hoveredTop = hover ? Math.min(Math.max(hover.y + 10, 8), size - 60) : 0;
 
@@ -150,7 +147,7 @@ export const CrowdingHeatmap = memo(function CrowdingHeatmap() {
           ref={canvasRef}
           className="mx-auto block rounded-md"
           onPointerMove={onPointerMove}
-          onPointerLeave={onPointerLeave}
+          onPointerLeave={() => setHover(null)}
           onPointerDown={onPointerDown}
         />
         {hover && (
@@ -159,7 +156,7 @@ export const CrowdingHeatmap = memo(function CrowdingHeatmap() {
             style={{ left: hoveredLeft, top: hoveredTop }}
           >
             <p className="font-mono">
-              {data.agent_ids[hover.i]} × {data.agent_ids[hover.j]}
+              {data.agent_ids[hover.i]} x {data.agent_ids[hover.j]}
             </p>
             <p className="text-slate-400">Similarity {hoveredValue.toFixed(3)}</p>
           </div>
@@ -168,7 +165,7 @@ export const CrowdingHeatmap = memo(function CrowdingHeatmap() {
 
       <div className="grid gap-1 text-xs text-slate-400 sm:grid-cols-2">
         <p>Click any off-diagonal cell to link agents across panels.</p>
-        <p className="text-right text-slate-500">{data.agent_ids.length} × {data.agent_ids.length} matrix</p>
+        <p className="text-right text-slate-500">{data.agent_ids.length} x {data.agent_ids.length} matrix</p>
       </div>
     </section>
   );

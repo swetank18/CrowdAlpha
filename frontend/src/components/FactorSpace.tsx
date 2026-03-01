@@ -1,11 +1,11 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
 import { MOCK_AGENTS, MOCK_FACTOR_SPACE } from "../mock/dashboard";
 import { useSimStore } from "../store/simulation";
 
 type PlotPoint = {
   agentId: string;
-  x: number;
-  y: number;
+  nx: number;
+  ny: number;
   activity: number;
   strategy: string;
 };
@@ -24,68 +24,36 @@ function inferStrategy(agentId: string) {
   return "unknown";
 }
 
+function getCanvasDims(el: HTMLDivElement | null) {
+  const width = Math.max(280, el?.clientWidth ?? 400);
+  const height = Math.max(220, el?.clientHeight ?? 300);
+  return { width, height };
+}
+
 export const FactorSpace = memo(function FactorSpace() {
-  const { factorSpace, agentStats, selectedPair } = useSimStore(
-    (s) => ({
-      factorSpace: s.factor_space,
-      agentStats: s.agent_stats,
-      selectedPair: s.selected_pair,
-    })
-  );
+  const { factorSpace, agentStats, selectedPair } = useSimStore((s) => ({
+    factorSpace: s.factor_space,
+    agentStats: s.agent_stats,
+    selectedPair: s.selected_pair,
+  }));
 
   const pointsSource = factorSpace?.agents?.length ? factorSpace.agents : MOCK_FACTOR_SPACE.agents;
   const statsSource = agentStats.length > 0 ? agentStats : MOCK_AGENTS;
-
   const strategyMap = useMemo(() => {
     const map = new Map<string, string>();
-    for (const stat of statsSource) {
-      map.set(stat.agent_id, stat.strategy_type);
-    }
+    for (const stat of statsSource) map.set(stat.agent_id, stat.strategy_type);
     return map;
   }, [statsSource]);
 
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [size, setSize] = useState({ width: 400, height: 300 });
-  const animated = useRef<Map<string, { x: number; y: number }>>(new Map());
-  const targets = useRef<Map<string, PlotPoint>>(new Map());
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const resize = () => {
-      const nextWidth = Math.max(280, el.clientWidth);
-      const nextHeight = Math.max(220, el.clientHeight);
-      setSize((prev) => {
-        if (prev.width === nextWidth && prev.height === nextHeight) return prev;
-        return { width: nextWidth, height: nextHeight };
-      });
-    };
-    resize();
-    if (typeof ResizeObserver === "undefined") {
-      window.addEventListener("resize", resize);
-      return () => window.removeEventListener("resize", resize);
-    }
-    const observer = new ResizeObserver(resize);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
-
-  const normalizedPoints = useMemo(() => {
-    const raw = pointsSource.map((agent) => {
-      const x = agent.pca?.x ?? 0;
-      const y = agent.pca?.y ?? 0;
-      const strategy = strategyMap.get(agent.agent_id) ?? inferStrategy(agent.agent_id);
-      return {
-        agentId: agent.agent_id,
-        xRaw: x,
-        yRaw: y,
-        activity: agent.activity ?? 0.5,
-        strategy,
-      };
-    });
-
-    if (raw.length === 0) return [] as PlotPoint[];
+  const points = useMemo<PlotPoint[]>(() => {
+    const raw = pointsSource.map((agent) => ({
+      agentId: agent.agent_id,
+      xRaw: agent.pca?.x ?? 0,
+      yRaw: agent.pca?.y ?? 0,
+      activity: agent.activity ?? 0.5,
+      strategy: strategyMap.get(agent.agent_id) ?? inferStrategy(agent.agent_id),
+    }));
+    if (raw.length === 0) return [];
 
     const minX = Math.min(...raw.map((p) => p.xRaw));
     const maxX = Math.max(...raw.map((p) => p.xRaw));
@@ -94,58 +62,64 @@ export const FactorSpace = memo(function FactorSpace() {
     const dx = Math.max(maxX - minX, 0.001);
     const dy = Math.max(maxY - minY, 0.001);
 
-    const pad = 28;
     return raw.map((point) => ({
       agentId: point.agentId,
-      x: pad + ((point.xRaw - minX) / dx) * (size.width - pad * 2),
-      y: size.height - (pad + ((point.yRaw - minY) / dy) * (size.height - pad * 2)),
+      nx: (point.xRaw - minX) / dx,
+      ny: (point.yRaw - minY) / dy,
       activity: point.activity,
       strategy: point.strategy,
     }));
-  }, [pointsSource, size, strategyMap]);
+  }, [pointsSource, strategyMap]);
 
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const animated = useRef<Map<string, { x: number; y: number }>>(new Map());
+  const targets = useRef<Map<string, PlotPoint>>(new Map());
   useEffect(() => {
     const map = new Map<string, PlotPoint>();
-    for (const point of normalizedPoints) {
+    for (const point of points) {
       map.set(point.agentId, point);
       if (!animated.current.has(point.agentId)) {
-        animated.current.set(point.agentId, { x: point.x, y: point.y });
+        animated.current.set(point.agentId, { x: 0, y: 0 });
       }
     }
     targets.current = map;
-  }, [normalizedPoints]);
+  }, [points]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.floor(size.width * dpr);
-    canvas.height = Math.floor(size.height * dpr);
-    canvas.style.width = `${size.width}px`;
-    canvas.style.height = `${size.height}px`;
+    const container = containerRef.current;
+    if (!canvas || !container) return;
 
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    let frame = 0;
     const draw = () => {
-      ctx.clearRect(0, 0, size.width, size.height);
+      const { width, height } = getCanvasDims(container);
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.floor(width * dpr);
+      canvas.height = Math.floor(height * dpr);
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${height}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, width, height);
 
       ctx.strokeStyle = "#233044";
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(0, size.height / 2);
-      ctx.lineTo(size.width, size.height / 2);
-      ctx.moveTo(size.width / 2, 0);
-      ctx.lineTo(size.width / 2, size.height);
+      ctx.moveTo(0, height / 2);
+      ctx.lineTo(width, height / 2);
+      ctx.moveTo(width / 2, 0);
+      ctx.lineTo(width / 2, height);
       ctx.stroke();
 
+      const pad = 28;
       for (const [agentId, target] of targets.current.entries()) {
-        const previous = animated.current.get(agentId) ?? { x: target.x, y: target.y };
-        const nextX = previous.x + (target.x - previous.x) * 0.16;
-        const nextY = previous.y + (target.y - previous.y) * 0.16;
+        const targetX = pad + target.nx * (width - pad * 2);
+        const targetY = height - (pad + target.ny * (height - pad * 2));
+        const previous = animated.current.get(agentId) ?? { x: targetX, y: targetY };
+        const nextX = previous.x + (targetX - previous.x) * 0.16;
+        const nextY = previous.y + (targetY - previous.y) * 0.16;
         animated.current.set(agentId, { x: nextX, y: nextY });
 
         const isSelected = selectedPair?.a === agentId || selectedPair?.b === agentId;
@@ -156,7 +130,6 @@ export const FactorSpace = memo(function FactorSpace() {
         ctx.arc(nextX, nextY, radius, 0, Math.PI * 2);
         ctx.fillStyle = color;
         ctx.fill();
-
         if (isSelected) {
           ctx.lineWidth = 2.2;
           ctx.strokeStyle = "#f8fafc";
@@ -166,19 +139,26 @@ export const FactorSpace = memo(function FactorSpace() {
           ctx.fillText(agentId, nextX + radius + 3, nextY - radius - 2);
         }
       }
-
       frame = window.requestAnimationFrame(draw);
     };
 
-    frame = window.requestAnimationFrame(draw);
-    return () => window.cancelAnimationFrame(frame);
-  }, [selectedPair, size]);
+    let frame = window.requestAnimationFrame(draw);
+    const onResize = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(draw);
+    };
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", onResize);
+    };
+  }, [selectedPair]);
 
   return (
     <section className="card h-full flex flex-col gap-3">
       <div className="flex items-center justify-between">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400">Factor Space (PCA)</h3>
-        <span className="text-[11px] text-slate-500">{normalizedPoints.length} active agents</span>
+        <span className="text-[11px] text-slate-500">{points.length} active agents</span>
       </div>
       <div ref={containerRef} className="flex-1 min-h-0 rounded-lg border border-surface-3 bg-surface/70 p-2">
         <canvas ref={canvasRef} className="block h-full w-full rounded-md" />

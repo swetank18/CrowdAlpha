@@ -4,6 +4,7 @@ import { useAnalyticsSnapshot } from "./hooks/useAnalyticsSnapshot";
 import { useMarketWS } from "./hooks/useMarketWS";
 import { AlphaDecayChart } from "./components/AlphaDecayChart";
 import { CrowdingHeatmap } from "./components/CrowdingHeatmap";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { FactorSpace } from "./components/FactorSpace";
 import { Leaderboard } from "./components/Leaderboard";
 import { OrderBook } from "./components/OrderBook";
@@ -141,22 +142,34 @@ function App() {
 
         <section className="grid grid-cols-1 gap-4 xl:grid-cols-12">
           <div className="xl:col-span-8 h-[350px]">
-            <PriceChart />
+            <ErrorBoundary compact name="PriceChart">
+              <PriceChart />
+            </ErrorBoundary>
           </div>
           <div className="xl:col-span-4 h-[350px]">
-            <OrderBook />
+            <ErrorBoundary compact name="OrderBook">
+              <OrderBook />
+            </ErrorBoundary>
           </div>
           <div className="xl:col-span-6 h-[420px]">
-            <CrowdingHeatmap />
+            <ErrorBoundary compact name="CrowdingHeatmap">
+              <CrowdingHeatmap />
+            </ErrorBoundary>
           </div>
           <div className="xl:col-span-6 h-[420px]">
-            <FactorSpace />
+            <ErrorBoundary compact name="FactorSpace">
+              <FactorSpace />
+            </ErrorBoundary>
           </div>
           <div className="xl:col-span-7">
-            <Leaderboard />
+            <ErrorBoundary compact name="Leaderboard">
+              <Leaderboard />
+            </ErrorBoundary>
           </div>
           <div className="xl:col-span-5">
-            <AlphaDecayChart />
+            <ErrorBoundary compact name="AlphaDecayChart">
+              <AlphaDecayChart />
+            </ErrorBoundary>
           </div>
         </section>
       </div>

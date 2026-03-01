@@ -2,6 +2,8 @@ import { Component, type ErrorInfo, type ReactNode } from "react";
 
 type Props = {
   children: ReactNode;
+  name?: string;
+  compact?: boolean;
 };
 
 type State = {
@@ -27,6 +29,18 @@ export class ErrorBoundary extends Component<Props, State> {
 
   render() {
     if (this.state.hasError) {
+      if (this.props.compact) {
+        return (
+          <section className="card h-full flex items-center justify-center">
+            <div className="text-center">
+              <p className="text-sm font-semibold text-rose-300">
+                {this.props.name ?? "Panel"} crashed
+              </p>
+              <p className="mt-1 text-xs text-slate-400 break-all">{this.state.message}</p>
+            </div>
+          </section>
+        );
+      }
       return (
         <main className="min-h-screen bg-surface text-slate-100 p-6">
           <div className="mx-auto max-w-3xl rounded-xl border border-rose-900/60 bg-rose-950/40 p-5">
