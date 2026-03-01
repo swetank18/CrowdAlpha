@@ -83,7 +83,7 @@ def ws_schema():
             "AGENT_STATE_CHANGED": "tick, agents[]",
             "CROWDING_MATRIX_UPDATED": "tick, crowding_intensity, agent_ids, matrix, agent_crowding_intensity, top_crowded_pairs",
             "REGIME_CHANGED": "tick, prev_regime, regime",
-            "TICK": "tick, mid_price, spread, vwap, volatility, regime, lfi, lfi_alert, crowding, order_book, recent_fills, agent_stats",
+            "TICK": "tick, mid_price, spread, vwap, volatility, regime, lfi, lfi_near_depth_ratio, lfi_alert, crowding, order_book, recent_fills, agent_stats",
             "HEARTBEAT": "message|n_connected",
         },
     }

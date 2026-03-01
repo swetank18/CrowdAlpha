@@ -58,17 +58,14 @@ export const FactorSpace = memo(function FactorSpace() {
     }));
     if (raw.length === 0) return [];
 
-    const minX = Math.min(...raw.map((p) => p.xRaw));
-    const maxX = Math.max(...raw.map((p) => p.xRaw));
-    const minY = Math.min(...raw.map((p) => p.yRaw));
-    const maxY = Math.max(...raw.map((p) => p.yRaw));
-    const dx = Math.max(maxX - minX, 0.001);
-    const dy = Math.max(maxY - minY, 0.001);
+    const maxAbsX = Math.max(0.001, ...raw.map((p) => Math.abs(p.xRaw)));
+    const maxAbsY = Math.max(0.001, ...raw.map((p) => Math.abs(p.yRaw)));
 
     return raw.map((point) => ({
       agentId: point.agentId,
-      nx: (point.xRaw - minX) / dx,
-      ny: (point.yRaw - minY) / dy,
+      // Keep zero-centered PCA points near the center rather than edge-clipping.
+      nx: Math.max(0, Math.min(1, (point.xRaw / maxAbsX + 1.0) * 0.5)),
+      ny: Math.max(0, Math.min(1, (point.yRaw / maxAbsY + 1.0) * 0.5)),
       activity: point.activity,
       strategy: point.strategy,
     }));

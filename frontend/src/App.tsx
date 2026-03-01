@@ -46,7 +46,7 @@ function App() {
   useMarketWS();
   useAnalyticsSnapshot(2500);
 
-  const { connected, tick, midPrice, spread, regime, lfi, crowding, timelineLen, selectedPair } =
+  const { connected, tick, midPrice, spread, regime, lfi, lfiDepth, crowding, timelineLen, selectedPair } =
     useSimStore(
       useShallow((s) => ({
         connected: s.connected,
@@ -55,6 +55,7 @@ function App() {
         spread: s.spread,
         regime: s.regime,
         lfi: s.lfi,
+        lfiDepth: s.lfi_near_depth_ratio,
         crowding: s.crowding,
         timelineLen: s.timeline.length,
         selectedPair: s.selected_pair,
@@ -136,6 +137,7 @@ function App() {
           <div className="card">
             <p className="text-[11px] uppercase tracking-wider text-slate-500">LFI</p>
             <p className="stat-value">{lfi.toFixed(3)}</p>
+            <p className="text-[10px] text-slate-500">depth(5t)/total: {lfiDepth.toFixed(3)}</p>
           </div>
           <div className="card">
             <p className="text-[11px] uppercase tracking-wider text-slate-500">Crowding</p>

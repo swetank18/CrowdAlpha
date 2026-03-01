@@ -83,6 +83,7 @@ class TickState:
     volatility:     float
     regime:         str
     lfi:            float
+    lfi_near_depth_ratio: float
     lfi_alert:      str
     crowding:       float       # scalar intensity
     order_book:     Dict        # depth snapshot
@@ -103,6 +104,7 @@ class TickState:
                 "volatility": self.volatility,
                 "regime": self.regime,
                 "lfi": self.lfi,
+                "lfi_near_depth_ratio": self.lfi_near_depth_ratio,
                 "lfi_alert": self.lfi_alert,
                 "crowding": self.crowding,
                 "order_book": self.order_book,
@@ -317,7 +319,7 @@ class Simulation:
                 cash          = pos.cash      if pos else self.config.initial_cash,
                 pnl           = pos.mark_to_market(mid) if pos else 0.0,
                 volatility    = vol,
-                vwap          = self._vwap(),
+                vwap          = self._vwap(mid),
                 crowding_intensity = self.crowding_matrix.intensity,
                 agent_crowding_intensity = float(agent_crowding.get(agent.agent_id, 0.0)),
                 crowding_side_pressure = self.alpha_decay.side_pressure,
@@ -361,7 +363,7 @@ class Simulation:
         current_mid = self.book.mid_price or mid
         self.execution_engine.apply_fills(fills, current_mid)
 
-        # Update VWAP
+        # Legacy cumulative VWAP bookkeeping (rolling VWAP is used in state).
         for fill in fills:
             self._vwap_num += fill.price * fill.qty
             self._vwap_den += fill.qty
@@ -437,10 +439,11 @@ class Simulation:
             timestamp      = time.time_ns(),
             mid_price      = round(current_mid, 4) if current_mid else None,
             spread         = round(self.book.spread, 4) if self.book.spread else None,
-            vwap           = round(self._vwap(), 4),
+            vwap           = round(self._vwap(current_mid), 4),
             volatility     = round(vol, 6),
             regime         = regime.value,
             lfi            = round(lfi, 4),
+            lfi_near_depth_ratio = round(self.fragility.near_depth_ratio, 6),
             lfi_alert      = self.fragility.alert_level,
             crowding       = round(intensity, 4),
             order_book     = snap_post,
@@ -617,10 +620,34 @@ class Simulation:
         log_rets = np.diff(np.log(np.array(recent) + 1e-9))
         return float(np.std(log_rets))
 
-    def _vwap(self) -> float:
-        if self._vwap_den < 1e-9:
+    def _vwap(self, fallback_price: Optional[float] = None, window: int = 200) -> float:
+        """
+        Rolling VWAP from recent fills.
+
+        Using a rolling window avoids stale fair-value lines when the market
+        drifts over long sessions with regime changes.
+        """
+        tape = self._trade_tape[-max(1, int(window)):]
+        if not tape:
+            if fallback_price is not None:
+                return float(fallback_price)
             return self.config.initial_price
-        return self._vwap_num / self._vwap_den
+
+        num = 0.0
+        den = 0.0
+        for tr in tape:
+            price = float(tr.get("price", 0.0))
+            qty = float(tr.get("qty", 0.0))
+            if price <= 0.0 or qty <= 0.0:
+                continue
+            num += price * qty
+            den += qty
+
+        if den < 1e-9:
+            if fallback_price is not None:
+                return float(fallback_price)
+            return self.config.initial_price
+        return num / den
 
     def _order_flow_imbalance(self, orders: List[Order]) -> float:
         buy = 0.0

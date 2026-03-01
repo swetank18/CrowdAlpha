@@ -42,6 +42,8 @@ class FragilityIndex:
         self._baseline_std: Optional[float] = None
         self._current_lfi: float = 0.0
         self._current_imbalance: float = 0.0
+        self._current_near_depth_ratio: float = 0.0
+        self._current_adjusted_ratio: float = 0.0
 
     def update(
         self,
@@ -59,6 +61,8 @@ class FragilityIndex:
         self._imb_hist.append(imb)
         self._raw_hist.append(raw)
         self._current_imbalance = imb
+        self._current_near_depth_ratio = ratio
+        self._current_adjusted_ratio = raw
 
         if len(self._ratio_hist) > 800:
             self._ratio_hist.pop(0)
@@ -99,6 +103,14 @@ class FragilityIndex:
     @property
     def fill_imbalance(self) -> float:
         return self._current_imbalance
+
+    @property
+    def near_depth_ratio(self) -> float:
+        return self._current_near_depth_ratio
+
+    @property
+    def adjusted_ratio(self) -> float:
+        return self._current_adjusted_ratio
 
     @property
     def alert_level(self) -> str:
@@ -202,4 +214,3 @@ class FragilityIndex:
         if candidates:
             return max(min(candidates), 1e-4)
         return max(mid * 0.0005, 0.01)
-

@@ -121,6 +121,23 @@ def test_agent_level_crowding_phi_matches_formula():
     assert mult["c"] < 1.0
 
 
+def test_cosine_similarity_is_pairwise_across_all_agents_not_strategy_buckets():
+    cm = CrowdingMatrix()
+    # mom_1 and rev_1 are intentionally identical to verify cross-type pairing.
+    F = np.array(
+        [
+            [0.8, 0.1, 0.6, 0.2, 0.1, 0.7],   # mom_1
+            [0.8, 0.1, 0.6, 0.2, 0.1, 0.7],   # rev_1 (different archetype label in id)
+            [-0.7, 0.2, -0.4, 0.5, -0.3, 0.2],  # mm_1
+        ]
+    )
+    ids = ["mom_1", "rev_1", "mm_1"]
+    cm.update(F, ids, activity_weights=[0.5, 0.4, 0.1])
+
+    top = cm.top_pairs(1)[0]
+    assert {top["agent_a"], top["agent_b"]} == {"mom_1", "rev_1"}
+
+
 def test_alpha_decay_fits_half_life_and_updates_side_multipliers():
     ad = AlphaDecay(min_samples=12)
     a1 = _SharpeStub("a1")

@@ -65,6 +65,8 @@ def get_analytics_snapshot(request: Request):
             "volatility": state.volatility if state else 0.0,
             "regime": state.regime if state else None,
             "lfi": state.lfi if state else 0.0,
+            "lfi_near_depth_ratio": sim.fragility.near_depth_ratio,
+            "lfi_adjusted_ratio": sim.fragility.adjusted_ratio,
             "crowding": state.crowding if state else 0.0,
         },
         "agent_diagnostics": sim.diagnostics.snapshot_all(sim.agents),

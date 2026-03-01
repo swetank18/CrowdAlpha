@@ -117,6 +117,7 @@ export interface SimState {
   volatility: number;
   regime: RegimeName | null;
   lfi: number;
+  lfi_near_depth_ratio: number;
   lfi_alert: LfiAlert;
   crowding: number;
   bids: DepthLevel[];
@@ -171,6 +172,7 @@ export const useSimStore = create<SimState>((set) => ({
   volatility: 0,
   regime: null,
   lfi: 0,
+  lfi_near_depth_ratio: 0,
   lfi_alert: "NORMAL",
   crowding: 0,
   bids: [],
@@ -218,6 +220,7 @@ export const useSimStore = create<SimState>((set) => ({
         volatility: Number(payload?.volatility ?? s.volatility ?? 0),
         regime: nextRegime,
         lfi: Number(payload?.lfi ?? s.lfi ?? 0),
+        lfi_near_depth_ratio: Number(payload?.lfi_near_depth_ratio ?? s.lfi_near_depth_ratio ?? 0),
         lfi_alert: (payload?.lfi_alert ?? s.lfi_alert ?? "NORMAL") as LfiAlert,
         crowding: Number(payload?.crowding ?? s.crowding ?? 0),
         bids: toDepth(book?.bids),
@@ -286,6 +289,7 @@ export const useSimStore = create<SimState>((set) => ({
       crowding: Number(snapshot?.market?.crowding ?? s.crowding),
       regime: (snapshot?.market?.regime ?? s.regime) as RegimeName | null,
       lfi: Number(snapshot?.market?.lfi ?? s.lfi),
+      lfi_near_depth_ratio: Number(snapshot?.market?.lfi_near_depth_ratio ?? s.lfi_near_depth_ratio),
       spread: Number(snapshot?.market?.spread ?? s.spread ?? 0),
       mid_price: snapshot?.market?.mid_price ?? s.mid_price,
       volatility: Number(snapshot?.market?.volatility ?? s.volatility ?? 0),
@@ -307,4 +311,3 @@ export function applyRegimeChangedEvent(payload: any) {
 export function applyAnalyticsSnapshot(snapshot: any) {
   useSimStore.getState().applyAnalyticsSnapshot(snapshot);
 }
-
