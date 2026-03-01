@@ -10,6 +10,7 @@ import { Leaderboard } from "./components/Leaderboard";
 import { OrderBook } from "./components/OrderBook";
 import { PriceChart } from "./components/PriceChart";
 import { useSimStore } from "./store/simulation";
+import { useShallow } from "zustand/react/shallow";
 import {
   MOCK_AGENTS,
   MOCK_CROWDING,
@@ -46,17 +47,19 @@ function App() {
   useAnalyticsSnapshot(2500);
 
   const { connected, tick, midPrice, spread, regime, lfi, crowding, timelineLen, selectedPair } =
-    useSimStore((s) => ({
-      connected: s.connected,
-      tick: s.tick,
-      midPrice: s.mid_price,
-      spread: s.spread,
-      regime: s.regime,
-      lfi: s.lfi,
-      crowding: s.crowding,
-      timelineLen: s.timeline.length,
-      selectedPair: s.selected_pair,
-    }));
+    useSimStore(
+      useShallow((s) => ({
+        connected: s.connected,
+        tick: s.tick,
+        midPrice: s.mid_price,
+        spread: s.spread,
+        regime: s.regime,
+        lfi: s.lfi,
+        crowding: s.crowding,
+        timelineLen: s.timeline.length,
+        selectedPair: s.selected_pair,
+      }))
+    );
 
   useEffect(() => {
     if (connected || timelineLen > 0) return;

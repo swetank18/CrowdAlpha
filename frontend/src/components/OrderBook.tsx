@@ -1,5 +1,6 @@
 import { memo, useMemo } from "react";
 import { useSimStore, type DepthLevel } from "../store/simulation";
+import { useShallow } from "zustand/react/shallow";
 
 const VISIBLE_LEVELS = 24;
 
@@ -51,13 +52,13 @@ function padLevels(levels: DepthLevel[], count: number): Array<DepthLevel | null
 
 export const OrderBook = memo(function OrderBook() {
   const { bids, asks, midPrice, spread, connected } = useSimStore(
-    (s) => ({
+    useShallow((s) => ({
       bids: s.bids,
       asks: s.asks,
       midPrice: s.mid_price,
       spread: s.spread,
       connected: s.connected,
-    })
+    }))
   );
 
   const { bidRows, askRows, maxQty } = useMemo(() => {

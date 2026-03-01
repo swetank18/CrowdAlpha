@@ -1,6 +1,7 @@
 import { memo, useEffect, useMemo, useRef } from "react";
 import { MOCK_AGENTS, MOCK_FACTOR_SPACE } from "../mock/dashboard";
 import { useSimStore } from "../store/simulation";
+import { useShallow } from "zustand/react/shallow";
 
 type PlotPoint = {
   agentId: string;
@@ -31,11 +32,13 @@ function getCanvasDims(el: HTMLDivElement | null) {
 }
 
 export const FactorSpace = memo(function FactorSpace() {
-  const { factorSpace, agentStats, selectedPair } = useSimStore((s) => ({
-    factorSpace: s.factor_space,
-    agentStats: s.agent_stats,
-    selectedPair: s.selected_pair,
-  }));
+  const { factorSpace, agentStats, selectedPair } = useSimStore(
+    useShallow((s) => ({
+      factorSpace: s.factor_space,
+      agentStats: s.agent_stats,
+      selectedPair: s.selected_pair,
+    }))
+  );
 
   const pointsSource = factorSpace?.agents?.length ? factorSpace.agents : MOCK_FACTOR_SPACE.agents;
   const statsSource = agentStats.length > 0 ? agentStats : MOCK_AGENTS;

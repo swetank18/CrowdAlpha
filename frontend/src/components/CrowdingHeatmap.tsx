@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { MOCK_CROWDING } from "../mock/dashboard";
 import { useSimStore } from "../store/simulation";
+import { useShallow } from "zustand/react/shallow";
 
 type HoverCell = {
   i: number;
@@ -26,11 +27,13 @@ function getSquareSize(el: HTMLDivElement | null) {
 }
 
 export const CrowdingHeatmap = memo(function CrowdingHeatmap() {
-  const { crowdingData, selectedPair, setSelectedPair } = useSimStore((s) => ({
-    crowdingData: s.crowding_data,
-    selectedPair: s.selected_pair,
-    setSelectedPair: s.setSelectedPair,
-  }));
+  const { crowdingData, selectedPair, setSelectedPair } = useSimStore(
+    useShallow((s) => ({
+      crowdingData: s.crowding_data,
+      selectedPair: s.selected_pair,
+      setSelectedPair: s.setSelectedPair,
+    }))
+  );
 
   const data = useMemo(() => {
     if (crowdingData && crowdingData.agent_ids.length > 0) return crowdingData;

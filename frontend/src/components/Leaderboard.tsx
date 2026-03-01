@@ -2,6 +2,7 @@ import { memo, useMemo, useState } from "react";
 import { MOCK_AGENTS, MOCK_CROWDING } from "../mock/dashboard";
 import type { AgentStat } from "../store/simulation";
 import { useSimStore } from "../store/simulation";
+import { useShallow } from "zustand/react/shallow";
 
 function fmt(value: number | null | undefined, digits = 2) {
   if (value === null || value === undefined || Number.isNaN(value)) return "-";
@@ -28,11 +29,11 @@ function exposureByAgent(agents: AgentStat[], matrix: number[][], weights: numbe
 
 export const Leaderboard = memo(function Leaderboard() {
   const { agentStats, crowdingData, selectedPair } = useSimStore(
-    (s) => ({
+    useShallow((s) => ({
       agentStats: s.agent_stats,
       crowdingData: s.crowding_data,
       selectedPair: s.selected_pair,
-    })
+    }))
   );
 
   const stats = agentStats.length > 0 ? agentStats : MOCK_AGENTS;

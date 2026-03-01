@@ -11,6 +11,7 @@ import {
 } from "recharts";
 import { MOCK_AGENTS, MOCK_DECAY } from "../mock/dashboard";
 import { useSimStore } from "../store/simulation";
+import { useShallow } from "zustand/react/shallow";
 
 const STRATEGY_COLORS: Record<string, string> = {
   momentum: "#0ea5e9",
@@ -38,10 +39,10 @@ function fmt(value: number | null | undefined, digits = 3) {
 
 export const AlphaDecayChart = memo(function AlphaDecayChart() {
   const { decayData, stats } = useSimStore(
-    (s) => ({
+    useShallow((s) => ({
       decayData: s.decay_data,
       stats: s.agent_stats,
-    })
+    }))
   );
 
   const decay = decayData?.agent_decay_params.length ? decayData : MOCK_DECAY;
