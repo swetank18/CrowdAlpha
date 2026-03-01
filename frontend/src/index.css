@@ -1,0 +1,36 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { box-sizing: border-box; }
+  body {
+    @apply bg-surface text-slate-100 font-sans antialiased;
+    margin: 0;
+  }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { @apply bg-surface-3 rounded-full; }
+}
+
+@layer components {
+  .card {
+    @apply bg-surface-1 rounded-xl border border-surface-3 p-4;
+  }
+  .stat-value {
+    @apply text-2xl font-bold tabular-nums slashed-zero;
+  }
+  .pill {
+    @apply inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium;
+  }
+  .regime-CALM     { @apply bg-green-900/50 text-green-300; }
+  .regime-TRENDING { @apply bg-blue-900/50 text-blue-300; }
+  .regime-UNSTABLE { @apply bg-yellow-900/50 text-yellow-300; }
+  .regime-CRASH    { @apply bg-red-900/50 text-red-300; }
+
+  .lfi-NORMAL   { @apply bg-green-900/50 text-green-300; }
+  .lfi-WARNING  { @apply bg-yellow-900/50 text-yellow-300; }
+  .lfi-DANGER   { @apply bg-orange-900/50 text-orange-300; }
+  .lfi-CRITICAL { @apply bg-red-900/50 text-red-300; }
+}
