@@ -11,7 +11,10 @@ export default {
                 warn: "#f59e0b",
                 crowd: "#8b5cf6",
             },
-            fontFamily: { sans: ["Inter", "system-ui", "sans-serif"] },
+            fontFamily: {
+                sans: ["Space Grotesk", "ui-sans-serif", "sans-serif"],
+                mono: ["IBM Plex Mono", "ui-monospace", "monospace"],
+            },
         },
     },
     plugins: [],

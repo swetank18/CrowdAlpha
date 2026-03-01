@@ -1,145 +1,171 @@
-/**
- * components/AlphaDecayChart.tsx
- *
- * Sharpe vs crowding intensity scatter/line for each agent.
- * Shows: observed data points + fitted exponential decay curve.
- */
-
-import React, { useEffect, useState } from "react";
+import { memo, useMemo } from "react";
 import {
-    LineChart, Line, ScatterChart, Scatter,
-    XAxis, YAxis, Tooltip, ResponsiveContainer,
-    Legend, CartesianGrid,
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
 } from "recharts";
+import { MOCK_AGENTS, MOCK_DECAY } from "../mock/dashboard";
+import { useSimStore } from "../store/simulation";
 
-const COLORS = ["#6366f1", "#22c55e", "#f59e0b", "#f43f5e", "#8b5cf6", "#06b6d4"];
+const STRATEGY_COLORS: Record<string, string> = {
+  momentum: "#0ea5e9",
+  mean_reversion: "#22c55e",
+  market_maker: "#f59e0b",
+  unknown: "#a78bfa",
+};
 
-interface DecayParams {
-    agent_id: string;
-    alpha_max: number;
-    lambda: number;
-    half_life: number | null;
-    r_squared: number;
-    curve: { crowding: number; predicted_sharpe: number }[];
+function inferStrategy(agentId: string) {
+  if (agentId.startsWith("mom")) return "momentum";
+  if (agentId.startsWith("rev")) return "mean_reversion";
+  if (agentId.startsWith("mm")) return "market_maker";
+  return "unknown";
 }
 
-interface DecayData {
-    agent_decay_params: DecayParams[];
-    crowding_intensity_history: number[];
+type AggregatedPoint = {
+  crowding: number;
+  [strategy: string]: number;
+};
+
+function fmt(value: number | null | undefined, digits = 3) {
+  if (value === null || value === undefined || Number.isNaN(value)) return "-";
+  return value.toFixed(digits);
 }
 
-export function AlphaDecayChart() {
-    const [data, setData] = useState<DecayData | null>(null);
+export const AlphaDecayChart = memo(function AlphaDecayChart() {
+  const { decayData, stats } = useSimStore(
+    (s) => ({
+      decayData: s.decay_data,
+      stats: s.agent_stats,
+    })
+  );
 
-    useEffect(() => {
-        const base = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
-        function fetchData() {
-            fetch(`${base}/analytics/decay`)
-                .then((r) => r.json())
-                .then(setData)
-                .catch(() => { });
-        }
-        fetchData();
-        const t = setInterval(fetchData, 3000);
-        return () => clearInterval(t);
-    }, []);
+  const decay = decayData?.agent_decay_params.length ? decayData : MOCK_DECAY;
+  const agents = stats.length > 0 ? stats : MOCK_AGENTS;
 
-    const params = data?.agent_decay_params ?? [];
+  const strategyByAgent = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const agent of agents) {
+      map.set(agent.agent_id, agent.strategy_type);
+    }
+    return map;
+  }, [agents]);
 
-    // Crowding intensity over time
-    const histData = (data?.crowding_intensity_history ?? []).map((v, i) => ({ i, v }));
-
-    if (params.length === 0) {
-        return (
-            <div className="card flex items-center justify-center h-48 text-slate-500 text-sm">
-                Fitting decay model… (needs ~20 ticks)
-            </div>
-        );
+  const { chartData, strategyKeys } = useMemo(() => {
+    const byStrategy = new Map<string, Map<number, number[]>>();
+    for (const param of decay.agent_decay_params) {
+      const strategy = strategyByAgent.get(param.agent_id) ?? inferStrategy(param.agent_id);
+      const bucket = byStrategy.get(strategy) ?? new Map<number, number[]>();
+      for (const point of param.curve) {
+        const list = bucket.get(point.crowding) ?? [];
+        list.push(point.predicted_sharpe);
+        bucket.set(point.crowding, list);
+      }
+      byStrategy.set(strategy, bucket);
     }
 
-    return (
-        <div className="card flex flex-col gap-4">
-            <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                Alpha Decay — Sharpe vs Crowding Intensity
-            </h3>
+    const xValues = Array.from(
+      new Set(
+        decay.agent_decay_params.flatMap((param) => param.curve.map((point) => point.crowding))
+      )
+    ).sort((a, b) => a - b);
 
-            {/* Decay curves */}
-            <ResponsiveContainer width="100%" height={200}>
-                <LineChart margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#252d3d" />
-                    <XAxis
-                        dataKey="crowding" type="number" domain={[0, 1]}
-                        tick={{ fontSize: 10, fill: "#64748b" }}
-                        label={{ value: "Crowding", position: "insideBottom", fontSize: 10, fill: "#64748b" }}
-                    />
-                    <YAxis
-                        tick={{ fontSize: 10, fill: "#64748b" }}
-                        label={{ value: "Predicted Sharpe", angle: -90, position: "insideLeft", fontSize: 10, fill: "#64748b" }}
-                    />
-                    <Tooltip
-                        contentStyle={{ background: "#1e2535", border: "1px solid #252d3d", borderRadius: 8, fontSize: 11 }}
-                        formatter={(v: number, name: string) => [v.toFixed(4), name]}
-                    />
-                    <Legend wrapperStyle={{ fontSize: 11 }} />
-                    {params.map((p, idx) => (
-                        <Line
-                            key={p.agent_id}
-                            data={p.curve}
-                            dataKey="predicted_sharpe"
-                            name={`${p.agent_id.slice(0, 8)} (λ=${p.lambda.toFixed(3)})`}
-                            stroke={COLORS[idx % COLORS.length]}
-                            strokeWidth={1.5}
-                            dot={false}
-                            isAnimationActive={false}
-                        />
-                    ))}
-                </LineChart>
-            </ResponsiveContainer>
+    const rows: AggregatedPoint[] = xValues.map((x) => ({ crowding: x }));
+    const keys = Array.from(byStrategy.keys());
+    for (const strategy of keys) {
+      const stratMap = byStrategy.get(strategy);
+      if (!stratMap) continue;
+      for (const row of rows) {
+        const list = stratMap.get(row.crowding) ?? [];
+        row[strategy] = list.length
+          ? list.reduce((acc, value) => acc + value, 0) / list.length
+          : NaN;
+      }
+    }
 
-            {/* Crowding history */}
-            <div>
-                <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">
-                    Crowding Intensity Over Time
-                </p>
-                <ResponsiveContainer width="100%" height={80}>
-                    <LineChart data={histData} margin={{ top: 0, right: 0, bottom: 0, left: 0 }}>
-                        <Line dataKey="v" stroke="#8b5cf6" strokeWidth={1.5} dot={false} isAnimationActive={false} />
-                        <YAxis domain={[-1, 1]} hide />
-                        <Tooltip
-                            contentStyle={{ background: "#1e2535", border: "1px solid #252d3d", borderRadius: 8, fontSize: 11 }}
-                            formatter={(v: number) => [v.toFixed(3), "Intensity"]}
-                        />
-                    </LineChart>
-                </ResponsiveContainer>
-            </div>
+    return { chartData: rows, strategyKeys: keys };
+  }, [decay, strategyByAgent]);
 
-            {/* Params table */}
-            <div className="overflow-auto">
-                <table className="w-full text-xs">
-                    <thead>
-                        <tr className="border-b border-surface-3">
-                            <th className="text-left text-[10px] text-slate-500 pb-1 pr-3">Agent</th>
-                            <th className="text-right text-[10px] text-slate-500 pb-1 pr-3">α_max</th>
-                            <th className="text-right text-[10px] text-slate-500 pb-1 pr-3">λ</th>
-                            <th className="text-right text-[10px] text-slate-500 pb-1 pr-3">Half-life</th>
-                            <th className="text-right text-[10px] text-slate-500 pb-1">R²</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {params.map((p, idx) => (
-                            <tr key={p.agent_id}>
-                                <td className="py-1 pr-3 font-mono text-[10px]" style={{ color: COLORS[idx % COLORS.length] }}>
-                                    {p.agent_id.slice(0, 8)}
-                                </td>
-                                <td className="py-1 pr-3 text-right tabular-nums">{p.alpha_max.toFixed(3)}</td>
-                                <td className="py-1 pr-3 text-right tabular-nums">{p.lambda.toFixed(3)}</td>
-                                <td className="py-1 pr-3 text-right tabular-nums">{p.half_life?.toFixed(1) ?? "∞"}</td>
-                                <td className="py-1 text-right tabular-nums">{p.r_squared.toFixed(3)}</td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-            </div>
+  const impact = decay.impact_multipliers;
+
+  return (
+    <section className="card h-full flex flex-col gap-3">
+      <div className="flex items-center justify-between">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400">Alpha Decay Curves</h3>
+        <div className="flex items-center gap-2 text-[11px] text-slate-500">
+          <span>Buy Impact {fmt(impact?.buy, 2)}x</span>
+          <span>Sell Impact {fmt(impact?.sell, 2)}x</span>
         </div>
-    );
-}
+      </div>
+
+      <div className="h-[280px]">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={chartData} margin={{ top: 8, right: 12, bottom: 4, left: 4 }}>
+            <CartesianGrid stroke="#273043" strokeDasharray="3 3" />
+            <XAxis
+              dataKey="crowding"
+              domain={[0, 1]}
+              type="number"
+              tick={{ fontSize: 10, fill: "#94a3b8" }}
+              tickLine={false}
+              axisLine={false}
+              tickFormatter={(value: number) => value.toFixed(2)}
+            />
+            <YAxis
+              tick={{ fontSize: 10, fill: "#94a3b8" }}
+              tickLine={false}
+              axisLine={false}
+              width={54}
+              tickFormatter={(value: number) => value.toFixed(2)}
+            />
+            <Tooltip
+              contentStyle={{
+                background: "#121826",
+                border: "1px solid #273043",
+                borderRadius: 8,
+                fontSize: 12,
+              }}
+              formatter={(value: number | string | undefined, name: string | undefined) => {
+                const num = typeof value === "number" ? value : Number(value ?? 0);
+                return [num.toFixed(3), name ?? "value"];
+              }}
+            />
+            <Legend wrapperStyle={{ fontSize: 11 }} />
+            {strategyKeys.map((strategy) => (
+              <Line
+                key={strategy}
+                type="monotone"
+                dataKey={strategy}
+                name={strategy}
+                stroke={STRATEGY_COLORS[strategy] ?? STRATEGY_COLORS.unknown}
+                strokeWidth={1.8}
+                dot={false}
+                isAnimationActive={false}
+                connectNulls
+              />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div className="grid gap-2 text-xs text-slate-400 sm:grid-cols-3">
+        <div className="rounded-md border border-surface-3 px-2 py-1.5">
+          <p className="text-[10px] uppercase tracking-wider text-slate-500">Side Pressure</p>
+          <p className="font-mono text-slate-200">{fmt(impact?.side_pressure, 3)}</p>
+        </div>
+        <div className="rounded-md border border-surface-3 px-2 py-1.5">
+          <p className="text-[10px] uppercase tracking-wider text-slate-500">History Points</p>
+          <p className="font-mono text-slate-200">{decay.crowding_intensity_history.length}</p>
+        </div>
+        <div className="rounded-md border border-surface-3 px-2 py-1.5">
+          <p className="text-[10px] uppercase tracking-wider text-slate-500">Fitted Agents</p>
+          <p className="font-mono text-slate-200">{decay.agent_decay_params.length}</p>
+        </div>
+      </div>
+    </section>
+  );
+});

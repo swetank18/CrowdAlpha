@@ -1,113 +1,119 @@
-/**
- * components/OrderBook.tsx
- *
- * Animated bid/ask depth visualization using horizontal bars.
- * Updates live from the WebSocket via Zustand.
- */
+import { memo, useMemo } from "react";
+import { useSimStore, type DepthLevel } from "../store/simulation";
 
-import React from "react";
-import { useSimStore, DepthLevel } from "../store/simulation";
+const VISIBLE_LEVELS = 24;
 
-const MAX_LEVELS = 8;
-
-function DepthBar({
-    level,
-    side,
-    maxQty,
-}: {
-    level: DepthLevel;
-    side: "bid" | "ask";
-    maxQty: number;
-}) {
-    const width = maxQty > 0 ? (level.qty / maxQty) * 100 : 0;
-    const isBid = side === "bid";
-
-    return (
-        <div className="relative flex items-center gap-2 py-[2px] group">
-            {/* Background fill bar */}
-            <div
-                className="absolute inset-y-0 rounded transition-all duration-200"
-                style={{
-                    [isBid ? "right" : "left"]: 0,
-                    width: `${width}%`,
-                    background: isBid
-                        ? "rgba(34,197,94,0.12)"
-                        : "rgba(244,63,94,0.12)",
-                }}
-            />
-            {isBid ? (
-                <>
-                    <span className="relative text-xs text-slate-400 w-14 text-right tabular-nums">
-                        {level.qty}
-                    </span>
-                    <span className="relative text-xs font-medium text-bid tabular-nums w-20 text-right">
-                        {level.price.toFixed(2)}
-                    </span>
-                </>
-            ) : (
-                <>
-                    <span className="relative text-xs font-medium text-ask tabular-nums w-20">
-                        {level.price.toFixed(2)}
-                    </span>
-                    <span className="relative text-xs text-slate-400 w-14 tabular-nums">
-                        {level.qty}
-                    </span>
-                </>
-            )}
-        </div>
-    );
+interface DepthRowProps {
+  level: DepthLevel | null;
+  side: "bid" | "ask";
+  maxQty: number;
 }
 
-export function OrderBook() {
-    const { bids, asks, mid_price, spread } = useSimStore();
+const DepthRow = memo(function DepthRow({ level, side, maxQty }: DepthRowProps) {
+  if (!level) {
+    return <div className="h-5 rounded bg-surface-2/40" />;
+  }
 
-    const maxQty = Math.max(
-        ...bids.slice(0, MAX_LEVELS).map((b) => b.qty),
-        ...asks.slice(0, MAX_LEVELS).map((a) => a.qty),
-        1
-    );
+  const widthPct = maxQty > 0 ? Math.min(100, (level.qty / maxQty) * 100) : 0;
+  const isBid = side === "bid";
 
-    return (
-        <div className="card flex flex-col h-full">
-            <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">
-                Order Book
-            </h3>
+  return (
+    <div className="relative h-5 overflow-hidden rounded">
+      <div
+        className="absolute inset-y-0 transition-[width] duration-150"
+        style={{
+          [isBid ? "right" : "left"]: 0,
+          width: `${widthPct}%`,
+          background: isBid ? "rgba(34,197,94,0.16)" : "rgba(244,63,94,0.16)",
+        }}
+      />
+      <div className={`relative z-10 grid h-full items-center text-[11px] tabular-nums ${isBid ? "grid-cols-[1fr_auto]" : "grid-cols-[auto_1fr]"}`}>
+        {isBid ? (
+          <>
+            <span className="pr-2 text-right text-slate-400">{level.qty.toFixed(0)}</span>
+            <span className="w-16 text-right font-medium text-bid">{level.price.toFixed(2)}</span>
+          </>
+        ) : (
+          <>
+            <span className="w-16 font-medium text-ask">{level.price.toFixed(2)}</span>
+            <span className="pl-2 text-slate-400">{level.qty.toFixed(0)}</span>
+          </>
+        )}
+      </div>
+    </div>
+  );
+});
 
-            {/* Headers */}
-            <div className="flex gap-2 mb-1 px-0">
-                <span className="text-[10px] text-slate-500 w-14 text-right">Qty</span>
-                <span className="text-[10px] text-slate-500 w-20 text-right">Bid</span>
-            </div>
-
-            {/* Bids */}
-            <div className="flex flex-col-reverse gap-px">
-                {bids.slice(0, MAX_LEVELS).map((b) => (
-                    <DepthBar key={b.price} level={b} side="bid" maxQty={maxQty} />
-                ))}
-            </div>
-
-            {/* Spread */}
-            <div className="my-2 flex items-center gap-2">
-                <div className="flex-1 h-px bg-surface-3" />
-                <span className="text-xs text-slate-300 font-semibold tabular-nums">
-                    {mid_price?.toFixed(2) ?? "—"}
-                </span>
-                <span className="text-[10px] text-slate-500">
-                    spread {spread?.toFixed(3) ?? "—"}
-                </span>
-                <div className="flex-1 h-px bg-surface-3" />
-            </div>
-
-            {/* Asks */}
-            <div className="flex gap-2 mb-1">
-                <span className="text-[10px] text-slate-500 w-20">Ask</span>
-                <span className="text-[10px] text-slate-500">Qty</span>
-            </div>
-            <div className="flex flex-col gap-px">
-                {asks.slice(0, MAX_LEVELS).map((a) => (
-                    <DepthBar key={a.price} level={a} side="ask" maxQty={maxQty} />
-                ))}
-            </div>
-        </div>
-    );
+function padLevels(levels: DepthLevel[], count: number): Array<DepthLevel | null> {
+  if (levels.length >= count) return levels.slice(0, count);
+  return [...levels, ...Array.from({ length: count - levels.length }, () => null)];
 }
+
+export const OrderBook = memo(function OrderBook() {
+  const { bids, asks, midPrice, spread, connected } = useSimStore(
+    (s) => ({
+      bids: s.bids,
+      asks: s.asks,
+      midPrice: s.mid_price,
+      spread: s.spread,
+      connected: s.connected,
+    })
+  );
+
+  const { bidRows, askRows, maxQty } = useMemo(() => {
+    const bidSlice = bids.slice(0, VISIBLE_LEVELS);
+    const askSlice = asks.slice(0, VISIBLE_LEVELS);
+    const max = Math.max(
+      1,
+      ...bidSlice.map((b) => b.qty),
+      ...askSlice.map((a) => a.qty)
+    );
+    return {
+      bidRows: padLevels(bidSlice, VISIBLE_LEVELS),
+      askRows: padLevels(askSlice, VISIBLE_LEVELS),
+      maxQty: max,
+    };
+  }, [bids, asks]);
+
+  return (
+    <section className="card h-full">
+      <header className="mb-3 flex items-center justify-between">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400">Order Book</h3>
+        <span className={`pill ${connected ? "bg-emerald-900/40 text-emerald-300" : "bg-slate-700/50 text-slate-300"}`}>
+          {connected ? "Live" : "Mock"}
+        </span>
+      </header>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1">
+          <div className="mb-1 grid grid-cols-[1fr_auto] text-[10px] uppercase tracking-wider text-slate-500">
+            <span className="text-right pr-2">Qty</span>
+            <span className="w-16 text-right">Bid</span>
+          </div>
+          {bidRows
+            .slice()
+            .reverse()
+            .map((row, idx) => (
+              <DepthRow key={`bid-${idx}`} level={row} side="bid" maxQty={maxQty} />
+            ))}
+        </div>
+
+        <div className="space-y-1">
+          <div className="mb-1 grid grid-cols-[auto_1fr] text-[10px] uppercase tracking-wider text-slate-500">
+            <span className="w-16">Ask</span>
+            <span className="pl-2">Qty</span>
+          </div>
+          {askRows.map((row, idx) => (
+            <DepthRow key={`ask-${idx}`} level={row} side="ask" maxQty={maxQty} />
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-3 flex items-center justify-center gap-3 text-xs">
+        <span className="font-semibold tabular-nums text-slate-200">{midPrice?.toFixed(3) ?? "-"}</span>
+        <span className="text-slate-500">spread</span>
+        <span className="tabular-nums text-slate-300">{spread?.toFixed(4) ?? "-"}</span>
+      </div>
+    </section>
+  );
+});
