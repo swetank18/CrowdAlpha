@@ -181,6 +181,13 @@ class Simulation:
 
     def stop(self) -> None:
         self._running = False
+        for agent in self.agents:
+            close_fn = getattr(agent, "close", None)
+            if callable(close_fn):
+                try:
+                    close_fn()
+                except Exception:
+                    pass
 
     def is_running(self) -> bool:
         return self._running

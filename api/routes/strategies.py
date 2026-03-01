@@ -21,6 +21,9 @@ class DeployRequest(BaseModel):
 class UserStrategyRequest(BaseModel):
     strategy_name: str
     code:          str
+    deploy:        bool = False
+    agent_id:      Optional[str] = None
+    config:        Dict[str, Any] = {}
 
 
 def _get_sim(request: Request):
@@ -68,7 +71,20 @@ def register_user_strategy(request: Request, body: UserStrategyRequest):
     sim = _get_sim(request)
     try:
         sim.registry.register_user_strategy(body.strategy_name, body.code)
-        return {"registered": body.strategy_name}
+        if not body.deploy:
+            return {"registered": body.strategy_name, "deployed": False}
+
+        import uuid
+
+        agent_id = body.agent_id or f"user_{str(uuid.uuid4())[:8]}"
+        agent = sim.registry.create(body.strategy_name, agent_id, body.config)
+        sim.add_agent(agent)
+        return {
+            "registered": body.strategy_name,
+            "deployed": True,
+            "agent_id": agent_id,
+            "strategy_type": body.strategy_name,
+        }
     except ValueError as e:
         raise HTTPException(400, str(e))
 
