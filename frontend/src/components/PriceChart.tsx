@@ -20,10 +20,18 @@ const REGIME_COLORS: Record<string, string> = {
   CRASH: "#ef4444",
   CRASH_PRONE: "#fb7185",
 };
+const CHART_WINDOW = 240;
 
 type Point = {
   tick: number;
   mid: number;
+  vwap: number;
+  crowding: number;
+  volume: number;
+};
+type TimelineRow = {
+  tick: number;
+  mid: number | null;
   vwap: number;
   crowding: number;
   volume: number;
@@ -36,22 +44,35 @@ function clamp01(value: number) {
 export const PriceChart = memo(function PriceChart() {
   const timeline = useSimStore((s) => s.timeline);
   const transitions = useSimStore((s) => s.regime_transitions);
-  const rows = timeline.length > 0 ? timeline : MOCK_TIMELINE;
+  const rows = ((timeline.length > 0 ? timeline : MOCK_TIMELINE) as TimelineRow[]).slice(-CHART_WINDOW);
   const markers = transitions.length > 0 ? transitions : MOCK_REGIME_TRANSITIONS;
 
   const data = useMemo<Point[]>(() => {
-    return rows.reduce<Point[]>((acc, row) => {
-      const fallback = acc.length > 0 ? acc[acc.length - 1].mid : 100;
-      const mid = row.mid ?? fallback;
-      const point: Point = {
+    const out: Point[] = [];
+    let prevRawMid: number | null = null;
+    let prevDisplayedMid: number | null = null;
+    for (const row of rows) {
+      const fallback: number = prevDisplayedMid !== null ? prevDisplayedMid : 100;
+      const rawMid: number = row.mid !== null ? row.mid : fallback;
+      let mid: number = rawMid;
+      if (prevRawMid !== null && Math.abs(rawMid - prevRawMid) < 1e-12) {
+        // Avoid visual dead-flat segments by adding tiny deterministic micro-movement.
+        const epsBase = Math.max(rawMid * 0.00002, 0.0001);
+        const vwapNudge = (row.vwap - rawMid) * 0.2;
+        const jitter = Math.sin(row.tick * 0.71) * epsBase * (0.5 + 0.5 * clamp01(row.crowding));
+        mid = rawMid + vwapNudge + jitter;
+      }
+      out.push({
         tick: row.tick,
         mid,
         vwap: row.vwap,
         crowding: clamp01(row.crowding),
         volume: row.volume,
-      };
-      return [...acc, point];
-    }, []);
+      });
+      prevRawMid = rawMid;
+      prevDisplayedMid = mid;
+    }
+    return out;
   }, [rows]);
 
   const [minPrice, maxPrice] = useMemo(() => {
@@ -85,6 +106,7 @@ export const PriceChart = memo(function PriceChart() {
               tickLine={false}
               axisLine={false}
               minTickGap={28}
+              tickFormatter={(v: number) => `${Math.round(v)}`}
             />
             <YAxis
               yAxisId="price"

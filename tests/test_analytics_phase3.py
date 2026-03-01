@@ -55,6 +55,39 @@ def test_diagnostics_computed_from_trade_stream():
     assert a2["fill_count"] > 0
 
 
+def test_sharpe_requires_50_tick_window_and_returns_none_for_zero_std():
+    agent = _AgentStub("a1", "momentum")
+
+    # < 50 return observations: Sharpe must stay unavailable.
+    short = Diagnostics(window=120, min_sharpe_ticks=50, ticks_per_year=10_000.0)
+    mid = 100.0
+    for tick in range(1, 40):
+        mid_pre = mid
+        mid += 0.01
+        short.update(
+            agents=[agent],
+            fills=[
+                Fill(
+                    buy_order_id=f"bo{tick}",
+                    sell_order_id=f"so{tick}",
+                    buy_agent_id="a1",
+                    sell_agent_id="aX",
+                    price=mid_pre + 0.02,
+                    qty=1,
+                )
+            ],
+            mid_pre=mid_pre,
+            mid_post=mid,
+        )
+    assert short.compute_by_id("a1", fallback_strategy="momentum").sharpe is None
+
+    # Zero-variance returns: Sharpe must stay None even with enough samples.
+    flat = Diagnostics(window=120, min_sharpe_ticks=50, ticks_per_year=10_000.0)
+    for tick in range(1, 90):
+        flat.update(agents=[agent], fills=[], mid_pre=100.0, mid_post=100.0)
+    assert flat.compute_by_id("a1", fallback_strategy="momentum").sharpe is None
+
+
 def test_fragility_spikes_when_near_depth_ratio_and_imbalance_spike():
     frag = FragilityIndex()
 
@@ -125,4 +158,3 @@ def test_regime_detector_marks_crash_prone_under_fragile_crowded_conditions():
         )
 
     assert regime == Regime.CRASH_PRONE
-

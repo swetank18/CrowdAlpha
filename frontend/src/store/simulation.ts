@@ -195,15 +195,45 @@ export const useSimStore = create<SimState>((set) => ({
       const book = payload?.order_book ?? {};
       const fills = toFills(payload?.recent_fills ?? []);
       const volume = fills.reduce((acc, f) => acc + f.qty, 0);
+      const baseMid = payload?.mid_price ?? s.mid_price ?? null;
+      const baseVwap = Number(payload?.vwap ?? s.vwap ?? 0);
+      const baseCrowding = Number(payload?.crowding ?? s.crowding ?? 0);
 
       const timelinePoint: MarketPoint = {
         tick: nextTick,
-        mid: payload?.mid_price ?? s.mid_price,
-        vwap: Number(payload?.vwap ?? s.vwap ?? 0),
-        crowding: Number(payload?.crowding ?? s.crowding ?? 0),
+        mid: baseMid,
+        vwap: baseVwap,
+        crowding: baseCrowding,
         volume,
         regime: nextRegime,
       };
+
+      const timeline = [...s.timeline];
+      const prevPoint = timeline.length > 0 ? timeline[timeline.length - 1] : null;
+      if (!prevPoint) {
+        timeline.push(timelinePoint);
+      } else if (nextTick <= prevPoint.tick) {
+        timeline[timeline.length - 1] = timelinePoint;
+      } else {
+        let gapStart = prevPoint.tick + 1;
+        const gapEnd = nextTick - 1;
+        const maxBackfill = Math.max(0, MAX_TIMELINE - 1);
+        const gapSize = Math.max(0, gapEnd - gapStart + 1);
+        if (gapSize > maxBackfill) {
+          gapStart = gapEnd - maxBackfill + 1;
+        }
+        for (let t = gapStart; t <= gapEnd; t += 1) {
+          timeline.push({
+            tick: t,
+            mid: prevPoint.mid,
+            vwap: prevPoint.vwap,
+            crowding: prevPoint.crowding,
+            volume: 0,
+            regime: prevPoint.regime,
+          });
+        }
+        timeline.push(timelinePoint);
+      }
 
       const transitions = [...s.regime_transitions];
       if (nextRegime && s.regime && nextRegime !== s.regime) {
@@ -226,7 +256,7 @@ export const useSimStore = create<SimState>((set) => ({
         bids: toDepth(book?.bids),
         asks: toDepth(book?.asks),
         recent_fills: [...fills, ...s.recent_fills].slice(0, MAX_FILLS),
-        timeline: [...s.timeline, timelinePoint].slice(-MAX_TIMELINE),
+        timeline: timeline.slice(-MAX_TIMELINE),
         regime_transitions: transitions.slice(-MAX_REGIME_TRANSITIONS),
         agent_stats: Array.isArray(payload?.agent_stats) ? payload.agent_stats : s.agent_stats,
       };

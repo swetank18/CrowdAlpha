@@ -155,7 +155,11 @@ class Simulation:
         self.alpha_decay      = AlphaDecay(min_samples=20)
 
         # Analytics
-        self.diagnostics      = Diagnostics()
+        self.diagnostics      = Diagnostics(
+            window=250,
+            min_sharpe_ticks=50,
+            ticks_per_year=self._estimated_ticks_per_year(),
+        )
         self.regime_detector  = RegimeDetector()
         self.fragility        = FragilityIndex()
 
@@ -211,7 +215,12 @@ class Simulation:
     # Blocking run (script / test mode)
     # ------------------------------------------------------------------
 
-    def run(self, n_ticks: int = 200, print_prices: bool = False) -> List[TickState]:
+    def run(
+        self,
+        n_ticks: int = 200,
+        print_prices: bool = False,
+        print_factor_vectors: bool = False,
+    ) -> List[TickState]:
         """Run synchronously for n_ticks. Returns list of TickStates."""
         self._running = True
         states = []
@@ -230,6 +239,8 @@ class Simulation:
                     f"crowd={state.crowding:.3f} | "
                     f"lfi={state.lfi:.3f}"
                 )
+            if print_factor_vectors:
+                self._print_crowding_debug(state)
         self._running = False
         return states
 
@@ -664,6 +675,48 @@ class Simulation:
             return 0.0
         return float((buy - sell) / total)
 
+    def _estimated_ticks_per_year(self) -> float:
+        tick_ms = float(self.config.tick_delay_ms)
+        if tick_ms <= 0.0:
+            # When sim is configured as "as fast as possible", anchor annualization
+            # to the default research speed (100 ms/tick).
+            tick_ms = 100.0
+        ticks_per_second = 1000.0 / tick_ms
+        return ticks_per_second * 365.0 * 24.0 * 60.0 * 60.0
+
+    def _print_crowding_debug(self, state: TickState) -> None:
+        factor_names = state.factor_data.get("factor_names", [])
+        agents = state.factor_data.get("agents", [])
+        if not agents:
+            return
+
+        print(f"  factor_vectors[{len(agents)}]:")
+        for row in agents:
+            aid = row.get("agent_id", "?")
+            factors = row.get("factors", {})
+            vec = [round(float(factors.get(name, 0.0)), 4) for name in factor_names]
+            print(f"    {aid}: {vec}")
+
+        matrix = self.crowding_matrix.matrix
+        if matrix is None or matrix.size == 0:
+            return
+
+        n = matrix.shape[0]
+        diag = np.diag(matrix)
+        diag_ok = bool(np.all(np.abs(diag - 1.0) < 1e-6))
+        if n > 1:
+            off = matrix[~np.eye(n, dtype=bool)]
+            off_min = float(np.min(off))
+            off_max = float(np.max(off))
+            off_mean = float(np.mean(off))
+        else:
+            off_min = off_max = off_mean = 0.0
+        print(
+            "  cosine_check:"
+            f" diag_is_one={diag_ok}"
+            f" offdiag[min={off_min:.4f}, mean={off_mean:.4f}, max={off_max:.4f}]"
+        )
+
 
 # ---------------------------------------------------------------------------
 # CLI entry point
@@ -680,6 +733,11 @@ if __name__ == "__main__":
     parser.add_argument("--rev", type=int, default=4, help="number of mean-reversion agents")
     parser.add_argument("--mm", type=int, default=2, help="number of market makers")
     parser.add_argument("--rl", type=int, default=0, help="number of RL agents")
+    parser.add_argument(
+        "--print-factors",
+        action="store_true",
+        help="print raw factor vectors and cosine diagnostics each tick",
+    )
     args = parser.parse_args()
 
     cfg = SimulationConfig(
@@ -694,7 +752,11 @@ if __name__ == "__main__":
     print("=== CrowdAlpha Simulation ===")
     print(f"Agents: {[a.agent_id for a in sim.agents]}")
     print(f"Running {args.ticks} ticks...\n")
-    states = sim.run(n_ticks=args.ticks, print_prices=True)
+    states = sim.run(
+        n_ticks=args.ticks,
+        print_prices=True,
+        print_factor_vectors=args.print_factors,
+    )
     if states:
         mid_start = states[0].mid_price or cfg.initial_price
         mid_end = states[-1].mid_price or mid_start

@@ -138,6 +138,28 @@ def test_cosine_similarity_is_pairwise_across_all_agents_not_strategy_buckets():
     assert {top["agent_a"], top["agent_b"]} == {"mom_1", "rev_1"}
 
 
+def test_cosine_matrix_has_unit_diagonal_and_variable_off_diagonal_pairs():
+    cm = CrowdingMatrix()
+    F = np.array(
+        [
+            [0.9, 0.1, 0.7, 0.2, 0.0, 0.8],
+            [0.4, 0.8, 0.2, 0.5, 0.3, 0.1],
+            [-0.6, 0.2, -0.5, 0.7, -0.4, 0.0],
+            [0.1, -0.7, 0.3, 0.6, 0.5, -0.2],
+        ]
+    )
+    ids = ["a1", "a2", "a3", "a4"]
+    cm.update(F, ids, activity_weights=[0.4, 0.3, 0.2, 0.1])
+    matrix = cm.matrix
+    assert matrix is not None
+    assert np.allclose(np.diag(matrix), 1.0, atol=1e-6)
+
+    off = matrix[~np.eye(len(ids), dtype=bool)]
+    assert float(np.max(off) - np.min(off)) > 0.2
+    assert np.any(off < 0.8)
+    assert np.any(off > 0.2)
+
+
 def test_alpha_decay_fits_half_life_and_updates_side_multipliers():
     ad = AlphaDecay(min_samples=12)
     a1 = _SharpeStub("a1")

@@ -56,8 +56,15 @@ class AgentDiagnostics:
 
 
 class Diagnostics:
-    def __init__(self, window: int = 250) -> None:
+    def __init__(
+        self,
+        window: int = 250,
+        min_sharpe_ticks: int = 50,
+        ticks_per_year: float = 31_536_000.0,
+    ) -> None:
         self.window = max(30, window)
+        self.min_sharpe_ticks = max(50, int(min_sharpe_ticks))
+        self.ticks_per_year = max(float(ticks_per_year), 1.0)
         self._cash: Dict[str, float] = {}
         self._inventory: Dict[str, int] = {}
         self._pnl_history: Dict[str, List[float]] = {}
@@ -171,19 +178,19 @@ class Diagnostics:
 
         arr = np.array(hist, dtype=float)
         rets = np.diff(arr)
-        if len(rets) < 2:
+        if len(rets) < self.min_sharpe_ticks:
             return diag
 
         mean_r = float(np.mean(rets))
-        std_r = float(np.std(rets))
+        std_r = float(np.std(rets, ddof=1)) if len(rets) > 1 else 0.0
         if std_r > 1e-9:
-            diag.sharpe = mean_r / std_r
+            diag.sharpe = (mean_r / std_r) * float(np.sqrt(self.ticks_per_year))
 
         downside = rets[rets < 0.0]
         if len(downside) > 1:
-            down_std = float(np.std(downside))
+            down_std = float(np.std(downside, ddof=1)) if len(downside) > 1 else 0.0
             if down_std > 1e-9:
-                diag.sortino = mean_r / down_std
+                diag.sortino = (mean_r / down_std) * float(np.sqrt(self.ticks_per_year))
 
         equity = arr
         running_max = np.maximum.accumulate(equity)
@@ -218,4 +225,3 @@ class Diagnostics:
         out = [self.compute(agent).to_dict() for agent in agents]
         out.sort(key=lambda x: (x["sharpe"] if x["sharpe"] is not None else -999.0), reverse=True)
         return out
-

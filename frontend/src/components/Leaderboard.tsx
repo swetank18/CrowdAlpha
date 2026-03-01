@@ -5,7 +5,7 @@ import { useSimStore } from "../store/simulation";
 import { useShallow } from "zustand/react/shallow";
 
 function fmt(value: number | null | undefined, digits = 2) {
-  if (value === null || value === undefined || Number.isNaN(value)) return "-";
+  if (value === null || value === undefined || Number.isNaN(value)) return "—";
   return value.toFixed(digits);
 }
 
@@ -74,8 +74,7 @@ export const Leaderboard = memo(function Leaderboard() {
       <div className="space-y-2 overflow-auto">
         {grouped.map(([strategyType, agents]) => {
           const open = collapsed[strategyType] ?? true;
-          const avgSharpe =
-            agents.reduce((acc, agent) => acc + (agent.sharpe ?? 0), 0) / Math.max(agents.length, 1);
+          const sharpeReady = agents.filter((agent) => agent.sharpe !== null && Number.isFinite(agent.sharpe)).length;
           return (
             <div key={strategyType} className="rounded-lg border border-surface-3/80 bg-surface-2/40">
               <button
@@ -90,7 +89,7 @@ export const Leaderboard = memo(function Leaderboard() {
               >
                 <span className="text-sm font-medium text-slate-200">{strategyType}</span>
                 <span className="text-xs text-slate-400">
-                  {agents.length} agents | avg Sharpe {fmt(avgSharpe, 3)} | {open ? "Hide" : "Show"}
+                  {agents.length} agents | Sharpe ready: {sharpeReady} | {open ? "Hide" : "Show"}
                 </span>
               </button>
 
