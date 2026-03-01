@@ -46,7 +46,7 @@ export const CrowdingHeatmap = memo(function CrowdingHeatmap() {
     if (!el) return;
     const resize = () => {
       const next = Math.max(220, Math.min(el.clientWidth, el.clientHeight || 400));
-      setSize(next);
+      setSize((prev) => (prev === next ? prev : next));
     };
     resize();
     if (typeof ResizeObserver === "undefined") {

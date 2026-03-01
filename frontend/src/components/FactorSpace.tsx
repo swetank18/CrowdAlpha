@@ -54,9 +54,11 @@ export const FactorSpace = memo(function FactorSpace() {
     const el = containerRef.current;
     if (!el) return;
     const resize = () => {
-      setSize({
-        width: Math.max(280, el.clientWidth),
-        height: Math.max(220, el.clientHeight),
+      const nextWidth = Math.max(280, el.clientWidth);
+      const nextHeight = Math.max(220, el.clientHeight);
+      setSize((prev) => {
+        if (prev.width === nextWidth && prev.height === nextHeight) return prev;
+        return { width: nextWidth, height: nextHeight };
       });
     };
     resize();
