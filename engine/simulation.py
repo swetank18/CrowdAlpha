@@ -25,15 +25,15 @@ from __future__ import annotations
 import asyncio
 import random
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
 import numpy as np
 
-from engine.core.order import Order, Fill
+from engine.core.order import Order, Fill, Side, OrderType
 from engine.core.order_book import OrderBook
 from engine.core.matching_engine import MatchingEngine
-from engine.core.execution import ExecutionEngine, ImpactModel, Position
+from engine.core.execution import ExecutionEngine, ImpactModel
 from engine.agents.base_agent import BaseAgent, MarketState
 from engine.agents.registry import AgentRegistry
 from engine.crowding.factor_space import FactorSpace
@@ -54,7 +54,7 @@ class SimulationConfig:
     n_momentum:       int   = 3
     n_mean_reversion: int   = 3
     n_market_makers:  int   = 2
-    n_rl:             int   = 1
+    n_rl:             int   = 0
 
     # Tick control
     tick_delay_ms:    float = 100.0   # 0 = as fast as possible
@@ -157,6 +157,7 @@ class Simulation:
 
         # Internal state
         self._recent_fills:  List[Fill]  = []
+        self._trade_tape:    List[Dict[str, Any]] = []
         self._price_history: List[float] = []
         self._vwap_num:      float       = 0.0
         self._vwap_den:      float       = 0.0
@@ -256,15 +257,18 @@ class Simulation:
         self._recent_fills.clear()
 
         # --- 1. Build market state snapshot for agents ---
-        mid   = self.book.mid_price or (self._price_history[-1] if self._price_history else self.config.initial_price)
-        snap  = self.book.depth_snapshot(n_levels=10)
+        mid = self.book.mid_price or (
+            self._price_history[-1] if self._price_history else self.config.initial_price
+        )
+        snap = self.book.depth_snapshot(n_levels=10)
+        best_bid_pre = snap["bids"][0][0] if snap["bids"] else None
+        best_ask_pre = snap["asks"][0][0] if snap["asks"] else None
 
-        recent_trade_dicts = [
-            {"price": f.price, "qty": f.qty, "buy_agent": f.buy_agent_id[:8], "sell_agent": f.sell_agent_id[:8]}
-            for f in self._recent_fills
-        ]
+        recent_trade_dicts = self._trade_tape[-20:]
 
         vol = self._rolling_vol()
+        impact_buy_mult, impact_sell_mult = self.alpha_decay.current_impact_multipliers()
+        self.execution_engine.impact.set_side_multipliers(impact_buy_mult, impact_sell_mult)
 
         # --- 2. Collect orders from all agents ---
         all_orders: List[Order] = []
@@ -272,9 +276,9 @@ class Simulation:
             pos = self.execution_engine.positions.get(agent.agent_id)
             mstate = MarketState(
                 tick          = tick,
-                mid_price     = self.book.mid_price,
-                best_bid      = self.book.best_bid.price if self.book.best_bid else None,
-                best_ask      = self.book.best_ask.price if self.book.best_ask else None,
+                mid_price     = mid,
+                best_bid      = best_bid_pre,
+                best_ask      = best_ask_pre,
                 spread        = self.book.spread,
                 bid_levels    = snap["bids"],
                 ask_levels    = snap["asks"],
@@ -284,11 +288,18 @@ class Simulation:
                 pnl           = pos.mark_to_market(mid) if pos else 0.0,
                 volatility    = vol,
                 vwap          = self._vwap(),
+                crowding_intensity = self.crowding_matrix.intensity,
+                crowding_side_pressure = self.alpha_decay.side_pressure,
+                impact_buy_mult = impact_buy_mult,
+                impact_sell_mult = impact_sell_mult,
             )
             try:
-                orders = agent.on_tick(mstate)
+                orders = agent.generate_orders(mstate)
                 if orders:
                     all_orders.extend(orders)
+            except (TypeError, ValueError):
+                # Interface contract violations are fatal in research mode.
+                raise
             except Exception:
                 pass  # agent errors don't crash the simulation
 
@@ -298,6 +309,20 @@ class Simulation:
         # --- 4. Match ---
         fills = self.matching_engine.process(all_orders)
         self._recent_fills = fills
+        fill_dicts = [
+            {
+                "price": f.price,
+                "qty": f.qty,
+                "buy_agent": f.buy_agent_id[:8],
+                "sell_agent": f.sell_agent_id[:8],
+                "timestamp": f.timestamp,
+            }
+            for f in fills
+        ]
+        if fill_dicts:
+            self._trade_tape.extend(fill_dicts)
+            if len(self._trade_tape) > 500:
+                self._trade_tape = self._trade_tape[-500:]
 
         # --- 5. Execution accounting ---
         current_mid = self.book.mid_price or mid
@@ -321,9 +346,28 @@ class Simulation:
                 self._price_history.pop(0)
 
         # --- 8. Crowding pipeline ---
-        F = self.factor_space.update(self.agents)
-        intensity = self.crowding_matrix.update(F, [a.agent_id for a in self.agents])
-        self.alpha_decay.update(intensity, self.agents)
+        agent_ids = [a.agent_id for a in self.agents]
+        F = self.factor_space.update(
+            agents=self.agents,
+            tick=tick,
+            mid_price=current_mid,
+            best_bid=best_bid_pre,
+            best_ask=best_ask_pre,
+            orders=all_orders,
+            fills=fills,
+        )
+        activity_weights = self.factor_space.activity_weights(agent_ids)
+        intensity = self.crowding_matrix.update(
+            F,
+            agent_ids,
+            activity_weights=activity_weights,
+        )
+        self.alpha_decay.update(
+            crowding_intensity=intensity,
+            agents=self.agents,
+            agent_activity=self.factor_space.latest_activity_map(),
+            order_flow_imbalance=self._order_flow_imbalance(all_orders),
+        )
 
         # --- 9. Analytics ---
         self.diagnostics.update(self.agents)
@@ -345,16 +389,6 @@ class Simulation:
         self._prev_mid = current_mid
 
         # --- 10. Assemble TickState ---
-        fill_dicts = [
-            {
-                "price":      f.price,
-                "qty":        f.qty,
-                "buy_agent":  f.buy_agent_id[:8],
-                "sell_agent": f.sell_agent_id[:8],
-                "timestamp":  f.timestamp,
-            }
-            for f in fills
-        ]
 
         state = TickState(
             tick           = tick,
@@ -398,6 +432,21 @@ class Simulation:
             return self.config.initial_price
         return self._vwap_num / self._vwap_den
 
+    def _order_flow_imbalance(self, orders: List[Order]) -> float:
+        buy = 0.0
+        sell = 0.0
+        for order in orders:
+            if order.order_type == OrderType.CANCEL:
+                continue
+            if order.side == Side.BID:
+                buy += float(order.qty)
+            else:
+                sell += float(order.qty)
+        total = buy + sell
+        if total < 1e-9:
+            return 0.0
+        return float((buy - sell) / total)
+
 
 # ---------------------------------------------------------------------------
 # CLI entry point
@@ -407,18 +456,36 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="CrowdAlpha simulation")
-    parser.add_argument("--ticks",   type=int,   default=200)
-    parser.add_argument("--seed",    type=int,   default=42)
+    parser.add_argument("--ticks", type=int, default=200)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--tick-delay", type=float, default=0.0)
+    parser.add_argument("--mom", type=int, default=4, help="number of momentum agents")
+    parser.add_argument("--rev", type=int, default=4, help="number of mean-reversion agents")
+    parser.add_argument("--mm", type=int, default=2, help="number of market makers")
+    parser.add_argument("--rl", type=int, default=0, help="number of RL agents")
     args = parser.parse_args()
 
     cfg = SimulationConfig(
-        seed          = args.seed,
-        tick_delay_ms = args.tick_delay,
+        n_momentum=args.mom,
+        n_mean_reversion=args.rev,
+        n_market_makers=args.mm,
+        n_rl=args.rl,
+        seed=args.seed,
+        tick_delay_ms=args.tick_delay,
     )
     sim = Simulation(cfg)
     print("=== CrowdAlpha Simulation ===")
     print(f"Agents: {[a.agent_id for a in sim.agents]}")
     print(f"Running {args.ticks} ticks...\n")
-    sim.run(n_ticks=args.ticks, print_prices=True)
+    states = sim.run(n_ticks=args.ticks, print_prices=True)
+    if states:
+        mid_start = states[0].mid_price or cfg.initial_price
+        mid_end = states[-1].mid_price or mid_start
+        returns = np.diff(np.log(np.array([s.mid_price for s in states if s.mid_price] or [mid_start])))
+        realized_vol = float(np.std(returns)) if len(returns) > 0 else 0.0
+        print(
+            f"\nSummary: start={mid_start:.4f} end={mid_end:.4f} "
+            f"ret={((mid_end / mid_start) - 1.0) * 100:.2f}% "
+            f"vol={realized_vol:.6f}"
+        )
     print("\nDone.")

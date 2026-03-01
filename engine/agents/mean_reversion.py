@@ -1,104 +1,152 @@
 """
 engine/agents/mean_reversion.py
 
-Mean reversion agent — trades on rolling z-score signal.
-
-Strategy:
-  - Computes rolling mean and std of mid-price over `window` ticks
-  - z-score = (mid - mean) / std
-  - Buys when z < -threshold (price is "too low")
-  - Sells when z > +threshold (price is "too high")
-  - Limit orders resting at a target reversion price
-  - Hard inventory cap prevents unlimited accumulation
-
-The interaction between momentum and mean-reversion agents is a primary
-driver of realistic-looking price dynamics: momentum pushes price away,
-mean-reversion pulls it back. Their balance determines autocorrelation.
+Mean-reversion agent using rolling z-score.
 """
 
 from __future__ import annotations
 
-import numpy as np
 from typing import List
-from engine.core.order import Order, Side, OrderType
+
+import numpy as np
+
+from engine.core.order import Order, OrderType, Side
 from .base_agent import BaseAgent, MarketState
 
 
 class MeanReversionAgent(BaseAgent):
-
     def __init__(
         self,
         agent_id: str,
-        window:    int   = 30,
-        threshold: float = 1.5,    # z-score entry threshold
-        order_qty: int   = 5,
-        max_inv:   int   = 40,
+        window: int = 30,
+        threshold: float = 1.4,
+        order_qty: int = 5,
+        max_inv: int = 40,
+        aggression: float = 0.0008,
+        market_z: float = 2.4,
         initial_cash: float = 100_000.0,
     ) -> None:
-        super().__init__(agent_id, "mean_reversion", initial_cash,
-                         window=window, threshold=threshold)
-        self.window    = window
+        super().__init__(
+            agent_id,
+            "mean_reversion",
+            initial_cash,
+            window=window,
+            threshold=threshold,
+            market_z=market_z,
+        )
+        self.window = window
         self.threshold = threshold
         self.order_qty = order_qty
-        self.max_inv   = max_inv
+        self.max_inv = max_inv
+        self.aggression = aggression
+        self.market_z = market_z
 
         self._price_history: List[float] = []
-        self._last_zscore:   float       = 0.0
-
-    # ------------------------------------------------------------------
+        self._last_zscore: float = 0.0
+        self._last_bid_agg: float = 0.0
+        self._last_ask_agg: float = 0.0
+        self._last_turnover: float = 0.0
 
     def on_tick(self, state: MarketState) -> List[Order]:
         mid = state.mid_or_last
         self._price_history.append(mid)
 
+        self._last_bid_agg = 0.0
+        self._last_ask_agg = 0.0
+        self._last_turnover = 0.0
+
         if len(self._price_history) < self.window:
             return []
 
-        recent = self._price_history[-self.window:]
-        mean   = np.mean(recent)
-        std    = np.std(recent)
-
+        recent = np.array(self._price_history[-self.window :], dtype=float)
+        mean = float(np.mean(recent))
+        std = float(np.std(recent))
         if std < 1e-8:
             return []
 
         z = (mid - mean) / std
+        # Inventory feedback: lean less into the same side when loaded.
+        z -= (self.inventory / max(self.max_inv, 1)) * 0.5
         self._last_zscore = z
 
-        orders = []
-
-        if z < -self.threshold and self.inventory < self.max_inv:
-            # Price is cheap relative to recent history → BUY
-            # Place limit order at mid (expect mean reversion to fill us)
-            orders.append(Order(
-                agent_id   = self.agent_id,
-                side       = Side.BID,
-                order_type = OrderType.LIMIT,
-                price      = round(mid, 4),
-                qty        = self.order_qty,
-            ))
-
-        elif z > self.threshold and self.inventory > -self.max_inv:
-            # Price is expensive → SELL
-            orders.append(Order(
-                agent_id   = self.agent_id,
-                side       = Side.ASK,
-                order_type = OrderType.LIMIT,
-                price      = round(mid, 4),
-                qty        = self.order_qty,
-            ))
-
-        # Keep history bounded
-        if len(self._price_history) > self.window * 3:
+        if len(self._price_history) > self.window * 4:
             self._price_history.pop(0)
 
-        return orders
+        if z < -self.market_z and self.inventory < self.max_inv:
+            self._last_bid_agg = 1.0
+            self._last_turnover = 1.0
+            return [
+                Order(
+                    agent_id=self.agent_id,
+                    side=Side.BID,
+                    order_type=OrderType.MARKET,
+                    price=mid,
+                    qty=self.order_qty + 2,
+                )
+            ]
+
+        if z < -self.threshold and self.inventory < self.max_inv:
+            self._last_bid_agg = min(self.aggression * 300.0, 1.0)
+            self._last_turnover = 0.5
+            return [
+                Order(
+                    agent_id=self.agent_id,
+                    side=Side.BID,
+                    order_type=OrderType.LIMIT,
+                    price=self._buy_price(state, mid, mean),
+                    qty=self.order_qty,
+                )
+            ]
+
+        if z > self.market_z and self.inventory > -self.max_inv:
+            self._last_ask_agg = 1.0
+            self._last_turnover = 1.0
+            return [
+                Order(
+                    agent_id=self.agent_id,
+                    side=Side.ASK,
+                    order_type=OrderType.MARKET,
+                    price=mid,
+                    qty=self.order_qty + 2,
+                )
+            ]
+
+        if z > self.threshold and self.inventory > -self.max_inv:
+            self._last_ask_agg = min(self.aggression * 300.0, 1.0)
+            self._last_turnover = 0.5
+            return [
+                Order(
+                    agent_id=self.agent_id,
+                    side=Side.ASK,
+                    order_type=OrderType.LIMIT,
+                    price=self._sell_price(state, mid, mean),
+                    qty=self.order_qty,
+                )
+            ]
+
+        return []
 
     def factor_vector(self) -> np.ndarray:
-        """
-        Factor vector:
-          [0, mean_rev_signal, bid_agg, ask_agg, 0]
-        """
-        sig = np.clip(-self._last_zscore / self.threshold, -1.0, 1.0)
-        bid_agg = 0.5 if self._last_zscore < -self.threshold else 0.0
-        ask_agg = 0.5 if self._last_zscore >  self.threshold else 0.0
-        return np.array([0.0, sig, bid_agg, ask_agg, 0.0])
+        sig = np.clip(-self._last_zscore / max(self.threshold, 1e-9), -1.0, 1.0)
+        return np.array(
+            [
+                0.0,
+                sig,
+                self._last_bid_agg,
+                self._last_ask_agg,
+                self._last_turnover,
+            ]
+        )
+
+    def _buy_price(self, state: MarketState, mid: float, mean: float) -> float:
+        target = min(mid, mean)
+        if state.best_bid is not None:
+            target = max(target, state.best_bid + 0.0001)
+        return round(max(target, mid * (1.0 - self.aggression)), 4)
+
+    def _sell_price(self, state: MarketState, mid: float, mean: float) -> float:
+        target = max(mid, mean)
+        if state.best_ask is not None:
+            target = min(target, state.best_ask - 0.0001)
+        return round(min(target, mid * (1.0 + self.aggression)), 4)
+

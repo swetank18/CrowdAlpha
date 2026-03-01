@@ -83,14 +83,21 @@ class ImpactModel:
 
     def __init__(self, eta: float = 0.01) -> None:
         self.eta = eta
+        self.buy_multiplier = 1.0
+        self.sell_multiplier = 1.0
+
+    def set_side_multipliers(self, buy: float, sell: float) -> None:
+        self.buy_multiplier = max(1.0, float(buy))
+        self.sell_multiplier = max(1.0, float(sell))
 
     def impact(self, qty: int, side: str) -> float:
         """
         Returns the signed price impact of a trade.
         Positive for buys (cost more), negative for sells (receive less).
         """
-        sign = 1.0 if side == "BID" else -1.0
-        return sign * self.eta * math.sqrt(qty)
+        if side == "BID":
+            return self.eta * self.buy_multiplier * math.sqrt(qty)
+        return -self.eta * self.sell_multiplier * math.sqrt(qty)
 
 
 # ---------------------------------------------------------------------------

@@ -1,208 +1,197 @@
 """
 engine/crowding/alpha_decay.py
 
-Models the causal relationship between crowding intensity and Sharpe ratio.
-
-Core model (per agent):
-    Sharpe(t) = α_max × exp(-λ × crowding(t))
-
-Where:
-    α_max  = maximum Sharpe (achievable when crowding → 0)
-    λ      = half-life decay coefficient (the key academic finding)
-    crowding(t) = crowding intensity at time t ∈ [0, 1]
-
-Half-life: when crowding doubles the decay, Sharpe halves.
-    t½ = ln(2) / λ
-
-A flat λ ≈ 0 means the strategy is crowding-resistant.
-A high λ means it degrades rapidly as the market becomes crowded.
-
-This module fits the model from observed data (rolling Sharpe + crowding
-intensity history) and generates the decay curves for visualization.
-
-Fitting method: least-squares exponential fit via log-linearization.
-    log(Sharpe) = log(α_max) - λ × crowding
-    → linear regression on (crowding, log(Sharpe))
+Crowding-driven alpha decay and slippage amplification model.
 """
 
 from __future__ import annotations
 
 import math
-import numpy as np
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Any, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
+
+import numpy as np
 
 if TYPE_CHECKING:
     from engine.agents.base_agent import BaseAgent
 
 
-# ---------------------------------------------------------------------------
-# Data structures
-# ---------------------------------------------------------------------------
-
 @dataclass
 class DecayParams:
-    """Fitted decay model for one agent."""
-    agent_id:  str
-    alpha_max: float          # max Sharpe at zero crowding
-    lambda_:   float          # decay coefficient
-    half_life: Optional[float]  # ticks until Sharpe halves; None if λ ≈ 0
-    r_squared: float          # goodness of fit ∈ [0, 1]
+    agent_id: str
+    alpha_max: float
+    lambda_: float
+    half_life: Optional[float]
+    r_squared: float
     n_samples: int
 
 
-# ---------------------------------------------------------------------------
-# AlphaDecay
-# ---------------------------------------------------------------------------
-
 class AlphaDecay:
-
-    def __init__(self, min_samples: int = 20) -> None:
+    def __init__(
+        self,
+        min_samples: int = 20,
+        slippage_scale: float = 1.6,
+        side_scale: float = 0.9,
+        max_impact_mult: float = 4.0,
+    ) -> None:
         self.min_samples = min_samples
+        self.slippage_scale = slippage_scale
+        self.side_scale = side_scale
+        self.max_impact_mult = max_impact_mult
 
-        # Rolling parallel history: (crowding_intensity, per_agent_sharpe)
         self._crowding_history: List[float] = []
-        self._sharpe_history:   Dict[str, List[float]] = {}  # agent_id → sharpes
-
-        # Fitted params
+        self._side_pressure_history: List[float] = []
+        self._agent_crowding: Dict[str, List[float]] = {}
+        self._agent_sharpe: Dict[str, List[float]] = {}
         self._params: Dict[str, DecayParams] = {}
 
-    # ------------------------------------------------------------------
-    # Update (called each tick by simulation.py)
-    # ------------------------------------------------------------------
+        self._impact_buy_mult: float = 1.0
+        self._impact_sell_mult: float = 1.0
+        self._side_pressure: float = 0.0
 
     def update(
         self,
         crowding_intensity: float,
         agents: List["BaseAgent"],
+        agent_activity: Optional[Dict[str, float]] = None,
+        order_flow_imbalance: float = 0.0,
     ) -> None:
-        """
-        Record this tick's crowding intensity and each agent's rolling Sharpe.
-        Refits the decay model every tick (cheap because we have few agents).
-        """
-        self._crowding_history.append(crowding_intensity)
+        crowd = float(np.clip(crowding_intensity, -1.0, 1.0))
+        self._crowding_history.append(crowd)
         if len(self._crowding_history) > 1000:
             self._crowding_history.pop(0)
+
+        activity = agent_activity or {}
+        self._side_pressure = float(np.clip(order_flow_imbalance * max(crowd, 0.0), -1.0, 1.0))
+        self._side_pressure_history.append(self._side_pressure)
+        if len(self._side_pressure_history) > 1000:
+            self._side_pressure_history.pop(0)
+
+        self._update_impact_multipliers(crowd)
 
         for agent in agents:
             sharpe = agent.rolling_sharpe()
             if sharpe is None:
                 continue
-            if agent.agent_id not in self._sharpe_history:
-                self._sharpe_history[agent.agent_id] = []
-            self._sharpe_history[agent.agent_id].append(sharpe)
-            if len(self._sharpe_history[agent.agent_id]) > 1000:
-                self._sharpe_history[agent.agent_id].pop(0)
 
-        # Refit if we have enough data
-        if len(self._crowding_history) >= self.min_samples:
-            self._fit_all()
+            agent_id = agent.agent_id
+            a = float(np.clip(activity.get(agent_id, 0.0), 0.0, 1.0))
+            experienced = float(np.clip(max(crowd, 0.0) * (0.5 + 0.5 * a), 0.0, 1.0))
 
-    # ------------------------------------------------------------------
-    # Fit
-    # ------------------------------------------------------------------
+            # Alpha proxy for exponential fit must be positive.
+            alpha_proxy = max(float(sharpe), 1e-3)
+
+            self._agent_crowding.setdefault(agent_id, []).append(experienced)
+            self._agent_sharpe.setdefault(agent_id, []).append(alpha_proxy)
+
+            if len(self._agent_crowding[agent_id]) > 1000:
+                self._agent_crowding[agent_id].pop(0)
+            if len(self._agent_sharpe[agent_id]) > 1000:
+                self._agent_sharpe[agent_id].pop(0)
+
+        self._fit_all()
+
+    def current_impact_multipliers(self) -> tuple[float, float]:
+        return self._impact_buy_mult, self._impact_sell_mult
+
+    @property
+    def side_pressure(self) -> float:
+        return self._side_pressure
+
+    def _update_impact_multipliers(self, crowd: float) -> None:
+        base_amp = 1.0 + self.slippage_scale * (max(crowd, 0.0) ** 2)
+        buy_side = 1.0 + self.side_scale * max(self._side_pressure, 0.0)
+        sell_side = 1.0 + self.side_scale * max(-self._side_pressure, 0.0)
+
+        buy = base_amp * buy_side
+        sell = base_amp * sell_side
+
+        self._impact_buy_mult = float(np.clip(buy, 1.0, self.max_impact_mult))
+        self._impact_sell_mult = float(np.clip(sell, 1.0, self.max_impact_mult))
 
     def _fit_all(self) -> None:
-        """Fit exponential decay model for every agent with enough data."""
-        crowd = np.array(self._crowding_history)
-
-        for agent_id, sharpes in self._sharpe_history.items():
-            if len(sharpes) < self.min_samples:
+        for agent_id, s_hist in self._agent_sharpe.items():
+            c_hist = self._agent_crowding.get(agent_id, [])
+            n = min(len(s_hist), len(c_hist))
+            if n < self.min_samples:
                 continue
 
-            # Align lengths (crowd and sharpe may differ if agent joined late)
-            n = min(len(crowd), len(sharpes))
-            c = crowd[-n:]
-            s = np.array(sharpes[-n:])
+            c = np.array(c_hist[-n:], dtype=float)
+            s = np.array(s_hist[-n:], dtype=float)
 
             params = self._fit_exponential(agent_id, c, s)
-            if params:
+            if params is not None:
                 self._params[agent_id] = params
 
     def _fit_exponential(
-        self, agent_id: str, crowding: np.ndarray, sharpe: np.ndarray
+        self,
+        agent_id: str,
+        crowding: np.ndarray,
+        alpha_proxy: np.ndarray,
     ) -> Optional[DecayParams]:
-        """
-        Fit: log(|Sharpe|) = log(α_max) - λ × crowding
-        via least squares.
-        """
-        # Filter out non-positive Sharpe (log undefined)
-        valid = sharpe > 0
-        if valid.sum() < 5:
+        valid = alpha_proxy > 1e-6
+        if int(np.sum(valid)) < max(6, self.min_samples // 2):
             return None
 
-        c_valid = crowding[valid]
-        s_valid = sharpe[valid]
+        c = crowding[valid]
+        y = np.log(alpha_proxy[valid])
 
-        log_s = np.log(s_valid)
-
-        # Linear regression: log_s = b0 - lambda * crowding
         try:
-            X = np.column_stack([np.ones(len(c_valid)), c_valid])
-            coeffs, residuals, _, _ = np.linalg.lstsq(X, log_s, rcond=None)
+            x = np.column_stack([np.ones(len(c)), c])
+            coeffs, _, _, _ = np.linalg.lstsq(x, y, rcond=None)
         except np.linalg.LinAlgError:
             return None
 
-        b0, neg_lambda = coeffs
-        alpha_max = math.exp(b0)
-        lambda_   = max(-neg_lambda, 0.0)  # force non-negative decay
+        b0, b1 = float(coeffs[0]), float(coeffs[1])
+        alpha_max = max(math.exp(b0), 1e-6)
+        lambda_ = max(-b1, 0.0)
 
-        # R² for goodness of fit
-        ss_res  = np.sum((log_s - (X @ coeffs)) ** 2)
-        ss_tot  = np.sum((log_s - log_s.mean()) ** 2)
-        r2      = 1.0 - (ss_res / ss_tot) if ss_tot > 1e-9 else 0.0
+        pred = x @ coeffs
+        ss_res = float(np.sum((y - pred) ** 2))
+        ss_tot = float(np.sum((y - np.mean(y)) ** 2))
+        r2 = 1.0 - (ss_res / ss_tot) if ss_tot > 1e-12 else 0.0
 
-        half_life = (math.log(2) / lambda_) if lambda_ > 1e-6 else None
-
+        half_life = (math.log(2.0) / lambda_) if lambda_ > 1e-8 else None
         return DecayParams(
-            agent_id  = agent_id,
-            alpha_max = round(alpha_max, 4),
-            lambda_   = round(lambda_, 4),
-            half_life = round(half_life, 2) if half_life else None,
-            r_squared = round(r2, 4),
-            n_samples = len(c_valid),
+            agent_id=agent_id,
+            alpha_max=round(alpha_max, 4),
+            lambda_=round(lambda_, 4),
+            half_life=round(half_life, 2) if half_life is not None else None,
+            r_squared=round(float(np.clip(r2, -1.0, 1.0)), 4),
+            n_samples=int(np.sum(valid)),
         )
 
-    # ------------------------------------------------------------------
-    # Output
-    # ------------------------------------------------------------------
-
-    def get_params(self) -> Dict[str, DecayParams]:
-        return dict(self._params)
-
-    def decay_curve(self, agent_id: str, n_points: int = 50) -> List[Dict]:
-        """
-        Generate model prediction curve for plotting:
-          crowding ∈ [0, 1] → predicted Sharpe
-        Returns list of {crowding, predicted_sharpe} dicts.
-        """
-        params = self._params.get(agent_id)
-        if params is None:
+    def decay_curve(self, agent_id: str, n_points: int = 50) -> List[Dict[str, float]]:
+        p = self._params.get(agent_id)
+        if p is None:
             return []
-
-        crowding_vals = np.linspace(0.0, 1.0, n_points)
-        predicted = params.alpha_max * np.exp(-params.lambda_ * crowding_vals)
-
+        xs = np.linspace(0.0, 1.0, n_points)
+        ys = p.alpha_max * np.exp(-p.lambda_ * xs)
         return [
-            {"crowding": round(float(c), 4), "predicted_sharpe": round(float(s), 4)}
-            for c, s in zip(crowding_vals, predicted)
+            {"crowding": round(float(x), 4), "predicted_sharpe": round(float(y), 4)}
+            for x, y in zip(xs, ys)
         ]
 
     def snapshot_for_api(self) -> Dict[str, Any]:
-        """Serializable snapshot for analytics API."""
         return {
-            "crowding_intensity_history": [
-                round(x, 4) for x in self._crowding_history[-100:]
-            ],
+            "crowding_intensity_history": [round(float(x), 4) for x in self._crowding_history[-100:]],
+            "side_pressure_history": [round(float(x), 4) for x in self._side_pressure_history[-100:]],
+            "impact_multipliers": {
+                "buy": round(self._impact_buy_mult, 4),
+                "sell": round(self._impact_sell_mult, 4),
+                "side_pressure": round(self._side_pressure, 4),
+            },
             "agent_decay_params": [
                 {
-                    "agent_id":  p.agent_id,
+                    "agent_id": p.agent_id,
                     "alpha_max": p.alpha_max,
-                    "lambda":    p.lambda_,
+                    "lambda": p.lambda_,
                     "half_life": p.half_life,
                     "r_squared": p.r_squared,
-                    "curve":     self.decay_curve(p.agent_id, n_points=20),
+                    "n_samples": p.n_samples,
+                    "curve": self.decay_curve(p.agent_id, n_points=20),
                 }
                 for p in self._params.values()
             ],
         }
+

@@ -112,7 +112,11 @@ class AgentRegistry:
 
         for i in range(n_market_makers):
             agents.append(self.create("market_maker", f"mm_{i+1}",
-                                      {"base_spread": 0.3 + i * 0.1}))
+                                      {
+                                          "base_spread": 0.05 + i * 0.02,
+                                          "min_half_spread": 0.01,
+                                          "quote_jitter": 0.02 + i * 0.01,
+                                      }))
 
         for i in range(n_rl):
             agents.append(self.create("rl_ppo", f"rl_{i+1}"))
