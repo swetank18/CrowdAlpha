@@ -5,8 +5,8 @@ import {
   applyTickEvent,
   useSimStore,
 } from "../store/simulation";
+import { WS_URL } from "../config";
 
-const WS_URL = import.meta.env.VITE_WS_URL ?? "ws://localhost:8000/ws/market";
 const RECONNECT_DELAY_MS = 2000;
 
 interface WsMessage {

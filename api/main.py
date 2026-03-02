@@ -26,6 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from engine.simulation import Simulation, SimulationConfig
 from api.routes import market, strategies, analytics
 from api import websocket as ws_module
+from db.models import init_db
 
 
 # ---------------------------------------------------------------------------
@@ -40,6 +41,9 @@ _sim_task: Optional[asyncio.Task] = None
 async def lifespan(app: FastAPI):
     """Start simulation on startup, clean up on shutdown."""
     global _sim, _sim_task
+
+    # Ensure local persistence tables exist (strategy submissions, snapshots, etc.).
+    init_db()
 
     # Create default simulation
     config = SimulationConfig(

@@ -1,183 +1,109 @@
-import { useEffect } from "react";
 import "./App.css";
+import { useEffect, useMemo, useState } from "react";
 import { useAnalyticsSnapshot } from "./hooks/useAnalyticsSnapshot";
 import { useMarketWS } from "./hooks/useMarketWS";
-import { AlphaDecayChart } from "./components/AlphaDecayChart";
-import { CrowdingHeatmap } from "./components/CrowdingHeatmap";
-import { ErrorBoundary } from "./components/ErrorBoundary";
-import { FactorSpace } from "./components/FactorSpace";
-import { Leaderboard } from "./components/Leaderboard";
-import { OrderBook } from "./components/OrderBook";
-import { PriceChart } from "./components/PriceChart";
-import { useSimStore } from "./store/simulation";
-import { useShallow } from "zustand/react/shallow";
-import {
-  MOCK_AGENTS,
-  MOCK_CROWDING,
-  MOCK_DECAY,
-  MOCK_FACTOR_SPACE,
-  MOCK_REGIME_TRANSITIONS,
-  MOCK_TIMELINE,
-} from "./mock/dashboard";
+import { DashboardPage } from "./pages/DashboardPage";
+import { DeployPage } from "./pages/DeployPage";
+import { DocsPage } from "./pages/DocsPage";
+import { LandingPage } from "./pages/LandingPage";
+import { LeaderboardPage } from "./pages/LeaderboardPage";
+import { ResearchPage } from "./pages/ResearchPage";
+import { StrategyPage } from "./pages/StrategyPage";
 
-function buildMockBook(midPrice: number) {
-  const step = 0.02;
-  const levels = 24;
-  const bids = Array.from({ length: levels }, (_, i) => {
-    const depthFactor = Math.exp(-i / 9);
-    const seasonal = Math.abs(Math.sin(i * 0.7));
-    return {
-      price: Number((midPrice - (i + 1) * step).toFixed(2)),
-      qty: Math.round(140 * depthFactor + 25 * seasonal + 4),
-    };
-  });
-  const asks = Array.from({ length: levels }, (_, i) => {
-    const depthFactor = Math.exp(-i / 9);
-    const seasonal = Math.abs(Math.cos(i * 0.65));
-    return {
-      price: Number((midPrice + (i + 1) * step).toFixed(2)),
-      qty: Math.round(130 * depthFactor + 22 * seasonal + 4),
-    };
-  });
-  return { bids, asks };
+function normalizePath(path: string) {
+  if (!path) return "/";
+  const clean = path.replace(/\/+$/, "");
+  return clean === "" ? "/" : clean;
+}
+
+function usePathname() {
+  const [pathname, setPathname] = useState(() => normalizePath(window.location.pathname));
+
+  useEffect(() => {
+    const onPop = () => setPathname(normalizePath(window.location.pathname));
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
+  const go = (to: string) => {
+    const target = normalizePath(to);
+    if (target === pathname) return;
+    window.history.pushState({}, "", target);
+    setPathname(target);
+  };
+
+  return { pathname, go };
+}
+
+type NavLinkProps = {
+  href: string;
+  label: string;
+  pathname: string;
+  go: (path: string) => void;
+};
+
+function NavLink({ href, label, pathname, go }: NavLinkProps) {
+  const active = pathname === href || (href !== "/" && pathname.startsWith(`${href}/`));
+  return (
+    <a
+      href={href}
+      onClick={(e) => {
+        e.preventDefault();
+        go(href);
+      }}
+      className={`rounded-md px-3 py-1.5 text-xs font-medium uppercase tracking-wider transition ${
+        active ? "bg-sky-900/40 text-sky-200" : "text-slate-300 hover:bg-slate-800/50"
+      }`}
+    >
+      {label}
+    </a>
+  );
+}
+
+function NotFound() {
+  return (
+    <div className="mx-auto max-w-4xl px-4 py-8 md:px-6 md:py-10">
+      <div className="card">
+        <h1 className="text-xl font-semibold text-slate-100">Route Not Found</h1>
+        <p className="mt-2 text-sm text-slate-400">This page does not exist in the current frontend shell.</p>
+      </div>
+    </div>
+  );
 }
 
 function App() {
   useMarketWS();
   useAnalyticsSnapshot(2500);
 
-  const { connected, tick, midPrice, spread, regime, lfi, lfiDepth, crowding, timelineLen, selectedPair } =
-    useSimStore(
-      useShallow((s) => ({
-        connected: s.connected,
-        tick: s.tick,
-        midPrice: s.mid_price,
-        spread: s.spread,
-        regime: s.regime,
-        lfi: s.lfi,
-        lfiDepth: s.lfi_near_depth_ratio,
-        crowding: s.crowding,
-        timelineLen: s.timeline.length,
-        selectedPair: s.selected_pair,
-      }))
-    );
+  const { pathname, go } = usePathname();
 
-  useEffect(() => {
-    if (connected || timelineLen > 0) return;
-    const timer = setTimeout(() => {
-      const state = useSimStore.getState();
-      if (state.connected || state.timeline.length > 0) return;
-      const last = MOCK_TIMELINE[MOCK_TIMELINE.length - 1];
-      const mid = last.mid ?? 100;
-      const { bids, asks } = buildMockBook(mid);
-      useSimStore.setState({
-        tick: last.tick,
-        mid_price: mid,
-        spread: 0.04,
-        vwap: last.vwap,
-        volatility: 0.0012,
-        regime: last.regime ?? "CALM",
-        lfi: 0.39,
-        lfi_alert: "WARNING",
-        crowding: MOCK_CROWDING.crowding_intensity,
-        bids,
-        asks,
-        timeline: MOCK_TIMELINE,
-        regime_transitions: MOCK_REGIME_TRANSITIONS,
-        agent_stats: MOCK_AGENTS,
-        crowding_data: MOCK_CROWDING,
-        factor_space: MOCK_FACTOR_SPACE,
-        decay_data: MOCK_DECAY,
-      });
-    }, 1000);
-    return () => clearTimeout(timer);
-  }, [connected, timelineLen]);
+  const page = useMemo(() => {
+    if (pathname === "/") return <LandingPage go={go} />;
+    if (pathname === "/dashboard") return <DashboardPage />;
+    if (pathname === "/deploy") return <DeployPage />;
+    if (pathname === "/leaderboard") return <LeaderboardPage />;
+    if (pathname === "/research") return <ResearchPage />;
+    if (pathname === "/docs") return <DocsPage />;
 
-  const regimeClass = `regime-${regime ?? "CALM"}`;
-  const hasSelection = Boolean(selectedPair);
+    const match = pathname.match(/^\/strategy\/([^/]+)$/);
+    if (match) return <StrategyPage agentId={decodeURIComponent(match[1])} />;
+
+    return <NotFound />;
+  }, [pathname]);
 
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,#1f2937_0%,#0f1117_55%,#0a0c12_100%)] text-slate-100">
-      <div className="mx-auto max-w-[1500px] px-4 py-5 md:px-6 md:py-7">
-        <header className="mb-4 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
-          <div>
-            <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">CrowdAlpha</p>
-            <h1 className="text-2xl font-semibold tracking-tight text-slate-100">Market Simulation Dashboard</h1>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <span
-              className={`pill ${
-                connected ? "bg-emerald-900/40 text-emerald-300" : "bg-amber-900/40 text-amber-300"
-              }`}
-            >
-              {connected ? "WebSocket Live" : "Mock Fallback"}
-            </span>
-            <span className={`pill ${regimeClass}`}>{regime ?? "CALM"}</span>
-            {hasSelection && (
-              <span className="pill bg-sky-900/40 text-sky-300">
-                Pair {selectedPair?.a} × {selectedPair?.b}
-              </span>
-            )}
-          </div>
-        </header>
-
-        <section className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-          <div className="card">
-            <p className="text-[11px] uppercase tracking-wider text-slate-500">Tick</p>
-            <p className="stat-value">{tick}</p>
-          </div>
-          <div className="card">
-            <p className="text-[11px] uppercase tracking-wider text-slate-500">Mid Price</p>
-            <p className="stat-value">{midPrice?.toFixed(3) ?? "-"}</p>
-          </div>
-          <div className="card">
-            <p className="text-[11px] uppercase tracking-wider text-slate-500">Spread</p>
-            <p className="stat-value">{spread?.toFixed(4) ?? "-"}</p>
-          </div>
-          <div className="card">
-            <p className="text-[11px] uppercase tracking-wider text-slate-500">LFI</p>
-            <p className="stat-value">{lfi.toFixed(3)}</p>
-            <p className="text-[10px] text-slate-500">depth(5t)/total: {lfiDepth.toFixed(3)}</p>
-          </div>
-          <div className="card">
-            <p className="text-[11px] uppercase tracking-wider text-slate-500">Crowding</p>
-            <p className="stat-value">{crowding.toFixed(3)}</p>
-          </div>
-        </section>
-
-        <section className="grid grid-cols-1 gap-4 xl:grid-cols-12">
-          <div className="xl:col-span-8 h-[350px]">
-            <ErrorBoundary compact name="PriceChart">
-              <PriceChart />
-            </ErrorBoundary>
-          </div>
-          <div className="xl:col-span-4 h-[350px]">
-            <ErrorBoundary compact name="OrderBook">
-              <OrderBook />
-            </ErrorBoundary>
-          </div>
-          <div className="xl:col-span-6 h-[420px]">
-            <ErrorBoundary compact name="CrowdingHeatmap">
-              <CrowdingHeatmap />
-            </ErrorBoundary>
-          </div>
-          <div className="xl:col-span-6 h-[420px]">
-            <ErrorBoundary compact name="FactorSpace">
-              <FactorSpace />
-            </ErrorBoundary>
-          </div>
-          <div className="xl:col-span-7">
-            <ErrorBoundary compact name="Leaderboard">
-              <Leaderboard />
-            </ErrorBoundary>
-          </div>
-          <div className="xl:col-span-5">
-            <ErrorBoundary compact name="AlphaDecayChart">
-              <AlphaDecayChart />
-            </ErrorBoundary>
-          </div>
-        </section>
-      </div>
+      <nav className="sticky top-0 z-30 border-b border-slate-800/70 bg-slate-950/75 backdrop-blur">
+        <div className="mx-auto flex max-w-[1500px] flex-wrap items-center gap-1 px-4 py-2 md:px-6">
+          <NavLink href="/" label="Home" pathname={pathname} go={go} />
+          <NavLink href="/dashboard" label="Dashboard" pathname={pathname} go={go} />
+          <NavLink href="/deploy" label="Deploy" pathname={pathname} go={go} />
+          <NavLink href="/leaderboard" label="Leaderboard" pathname={pathname} go={go} />
+          <NavLink href="/research" label="Research" pathname={pathname} go={go} />
+          <NavLink href="/docs" label="Docs" pathname={pathname} go={go} />
+        </div>
+      </nav>
+      {page}
     </main>
   );
 }

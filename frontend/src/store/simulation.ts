@@ -63,6 +63,7 @@ export interface CrowdingData {
   matrix: number[][];
   activity_weights: number[];
   crowding_intensity: number;
+  agent_crowding_intensity?: Record<string, number>;
   top_crowded_pairs: CrowdingPair[];
 }
 
@@ -268,6 +269,10 @@ export const useSimStore = create<SimState>((set) => ({
         matrix: Array.isArray(payload?.matrix) ? payload.matrix : [],
         activity_weights: Array.isArray(payload?.activity_weights) ? payload.activity_weights : [],
         crowding_intensity: Number(payload?.crowding_intensity ?? s.crowding),
+        agent_crowding_intensity:
+          payload?.agent_crowding_intensity && typeof payload.agent_crowding_intensity === "object"
+            ? payload.agent_crowding_intensity
+            : {},
         top_crowded_pairs: Array.isArray(payload?.top_crowded_pairs) ? payload.top_crowded_pairs : [],
       },
       crowding: Number(payload?.crowding_intensity ?? s.crowding),
@@ -293,6 +298,11 @@ export const useSimStore = create<SimState>((set) => ({
             matrix: Array.isArray(snapshot.crowding.matrix) ? snapshot.crowding.matrix : [],
             activity_weights: Array.isArray(snapshot.crowding.activity_weights) ? snapshot.crowding.activity_weights : [],
             crowding_intensity: Number(snapshot.crowding.crowding_intensity ?? s.crowding),
+            agent_crowding_intensity:
+              snapshot?.crowding?.agent_crowding_intensity &&
+              typeof snapshot.crowding.agent_crowding_intensity === "object"
+                ? snapshot.crowding.agent_crowding_intensity
+                : {},
             top_crowded_pairs: Array.isArray(snapshot.crowding.top_crowded_pairs) ? snapshot.crowding.top_crowded_pairs : [],
           }
         : s.crowding_data,
