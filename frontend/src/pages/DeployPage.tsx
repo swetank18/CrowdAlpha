@@ -16,6 +16,12 @@ const TEMPLATE_HELP: Record<Template, string> = {
   market_maker: "Provides two-sided liquidity and earns spread with inventory control.",
 };
 
+const BEGINNER_DEFAULTS: Record<Template, { lookback: number; aggression: number; order_qty: number }> = {
+  momentum: { lookback: 30, aggression: 0.0015, order_qty: 6 },
+  mean_reversion: { lookback: 40, aggression: 0.001, order_qty: 5 },
+  market_maker: { lookback: 20, aggression: 0.0008, order_qty: 8 },
+};
+
 export function DeployPage() {
   const [track, setTrack] = useState<Track>("beginner");
   const [template, setTemplate] = useState<Template>("momentum");
@@ -31,6 +37,17 @@ export function DeployPage() {
 
   const templateHelp = useMemo(() => TEMPLATE_HELP[template], [template]);
 
+  function buildParameters() {
+    if (track === "beginner") {
+      return BEGINNER_DEFAULTS[template];
+    }
+    return {
+      lookback,
+      aggression: aggressiveness,
+      order_qty: positionSize,
+    };
+  }
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setSubmitState({ kind: "loading" });
@@ -44,14 +61,10 @@ export function DeployPage() {
           contact: contact.trim(),
           mode: track,
           template_strategy: template,
-          parameters: {
-            lookback,
-            aggression: aggressiveness,
-            order_qty: positionSize,
-          },
-          clone_source_agent_id: cloneSource.trim() || null,
-          visibility,
-          notes: notes.trim() || null,
+          parameters: buildParameters(),
+          clone_source_agent_id: track === "beginner" ? null : cloneSource.trim() || null,
+          visibility: track === "beginner" ? "public" : visibility,
+          notes: track === "beginner" ? null : notes.trim() || null,
         }),
       });
 
@@ -79,13 +92,53 @@ export function DeployPage() {
     }
   }
 
+  if (submitState.kind === "ok") {
+    return (
+      <div className="mx-auto w-full max-w-4xl px-4 py-6 md:px-6 md:py-8">
+        <div className="card space-y-4">
+          <p className="text-xs uppercase tracking-[0.24em] text-emerald-400">Submission Received</p>
+          <h1 className="text-2xl font-semibold text-slate-100">Your strategy is queued for activation.</h1>
+          <div className="rounded-md border border-slate-700 bg-slate-900/40 px-3 py-2 text-sm text-slate-300">
+            <p>
+              Reference ID: <span className="font-mono text-slate-100">{submitState.submissionId}</span>
+            </p>
+            <p>
+              Track: <span className="font-mono text-slate-100">{track}</span> | Template: {template}
+            </p>
+          </div>
+          <ul className="space-y-1 text-sm text-slate-300">
+            <li>1. Strategies are reviewed and activated within 2 hours.</li>
+            <li>2. You will receive activation confirmation at your contact address with your agent reference.</li>
+            <li>3. Watch market conditions and regime shifts while waiting for activation.</li>
+          </ul>
+          <div className="flex flex-wrap gap-3">
+            <a
+              href="/dashboard"
+              className="rounded-lg bg-sky-500 px-5 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-sky-400"
+            >
+              Watch Dashboard
+            </a>
+            <button
+              type="button"
+              onClick={() => setSubmitState({ kind: "idle" })}
+              className="rounded-lg border border-slate-600 px-5 py-2.5 text-sm font-semibold text-slate-100 transition hover:border-slate-400 hover:bg-slate-800/40"
+            >
+              Submit Another
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-6 md:px-6 md:py-8">
       <header className="mb-5">
         <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Deploy</p>
         <h1 className="mt-2 text-2xl font-semibold text-slate-100">Submit Strategy Configuration</h1>
         <p className="mt-2 text-sm text-slate-400">
-          v1 flow is config-only. You submit parameters, then an admin approves and activates the strategy.
+          Strategies are reviewed and activated within 2 hours. You will get a confirmation message with your
+          reference ID.
         </p>
       </header>
 
@@ -146,78 +199,96 @@ export function DeployPage() {
             <span className="text-xs text-slate-500">{templateHelp}</span>
           </label>
 
-          <label className="grid gap-1.5 text-sm text-slate-300">
-            <span className="text-xs uppercase tracking-wider text-slate-500">Clone Source (optional)</span>
-            <input
-              value={cloneSource}
-              onChange={(e) => setCloneSource(e.target.value)}
-              placeholder="agent_id from leaderboard"
-              className="rounded-md border border-slate-600 bg-slate-900/50 px-3 py-2 text-sm outline-none ring-sky-400 focus:ring"
-            />
-          </label>
+          {track !== "beginner" && (
+            <label className="grid gap-1.5 text-sm text-slate-300">
+              <span className="text-xs uppercase tracking-wider text-slate-500">Clone Source (optional)</span>
+              <input
+                value={cloneSource}
+                onChange={(e) => setCloneSource(e.target.value)}
+                placeholder="agent_id from leaderboard"
+                className="rounded-md border border-slate-600 bg-slate-900/50 px-3 py-2 text-sm outline-none ring-sky-400 focus:ring"
+              />
+            </label>
+          )}
         </div>
 
-        <div className="grid gap-4 md:grid-cols-3">
-          <label className="grid gap-1.5 text-sm text-slate-300">
-            <span className="text-xs uppercase tracking-wider text-slate-500">Lookback</span>
-            <input
-              type="number"
-              min={5}
-              max={300}
-              value={lookback}
-              onChange={(e) => setLookback(Number(e.target.value))}
-              className="rounded-md border border-slate-600 bg-slate-900/50 px-3 py-2 text-sm outline-none ring-sky-400 focus:ring"
-            />
-          </label>
+        {track !== "beginner" && (
+          <>
+            <div className="grid gap-4 md:grid-cols-3">
+              <label className="grid gap-1.5 text-sm text-slate-300">
+                <span className="text-xs uppercase tracking-wider text-slate-500">Lookback</span>
+                <input
+                  type="number"
+                  min={5}
+                  max={300}
+                  value={lookback}
+                  onChange={(e) => setLookback(Number(e.target.value))}
+                  className="rounded-md border border-slate-600 bg-slate-900/50 px-3 py-2 text-sm outline-none ring-sky-400 focus:ring"
+                />
+                <span className="text-xs text-slate-500">
+                  Number of ticks used to compute signal. Higher = slower, smoother. Range: 10-100.
+                </span>
+              </label>
 
-          <label className="grid gap-1.5 text-sm text-slate-300">
-            <span className="text-xs uppercase tracking-wider text-slate-500">Aggressiveness</span>
-            <input
-              type="number"
-              min={0}
-              step={0.0001}
-              value={aggressiveness}
-              onChange={(e) => setAggressiveness(Number(e.target.value))}
-              className="rounded-md border border-slate-600 bg-slate-900/50 px-3 py-2 text-sm outline-none ring-sky-400 focus:ring"
-            />
-          </label>
+              <label className="grid gap-1.5 text-sm text-slate-300">
+                <span className="text-xs uppercase tracking-wider text-slate-500">Aggressiveness</span>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.0001}
+                  value={aggressiveness}
+                  onChange={(e) => setAggressiveness(Number(e.target.value))}
+                  className="rounded-md border border-slate-600 bg-slate-900/50 px-3 py-2 text-sm outline-none ring-sky-400 focus:ring"
+                />
+                <span className="text-xs text-slate-500">
+                  Order size relative to best quote. 0.001 = conservative, 0.01 = aggressive.
+                </span>
+              </label>
 
-          <label className="grid gap-1.5 text-sm text-slate-300">
-            <span className="text-xs uppercase tracking-wider text-slate-500">Position Size</span>
-            <input
-              type="number"
-              min={1}
-              max={1000}
-              value={positionSize}
-              onChange={(e) => setPositionSize(Number(e.target.value))}
-              className="rounded-md border border-slate-600 bg-slate-900/50 px-3 py-2 text-sm outline-none ring-sky-400 focus:ring"
-            />
-          </label>
-        </div>
+              <label className="grid gap-1.5 text-sm text-slate-300">
+                <span className="text-xs uppercase tracking-wider text-slate-500">Position Size</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={1000}
+                  value={positionSize}
+                  onChange={(e) => setPositionSize(Number(e.target.value))}
+                  className="rounded-md border border-slate-600 bg-slate-900/50 px-3 py-2 text-sm outline-none ring-sky-400 focus:ring"
+                />
+                <span className="text-xs text-slate-500">
+                  Max units held at any time. Larger = more market impact.
+                </span>
+              </label>
+            </div>
 
-        <div className="grid gap-4 md:grid-cols-2">
-          <label className="grid gap-1.5 text-sm text-slate-300">
-            <span className="text-xs uppercase tracking-wider text-slate-500">Visibility</span>
-            <select
-              value={visibility}
-              onChange={(e) => setVisibility(e.target.value as "public" | "private")}
-              className="rounded-md border border-slate-600 bg-slate-900/50 px-3 py-2 text-sm outline-none ring-sky-400 focus:ring"
-            >
-              <option value="public">public</option>
-              <option value="private">private</option>
-            </select>
-          </label>
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="grid gap-1.5 text-sm text-slate-300">
+                <span className="text-xs uppercase tracking-wider text-slate-500">Visibility</span>
+                <select
+                  value={visibility}
+                  onChange={(e) => setVisibility(e.target.value as "public" | "private")}
+                  className="rounded-md border border-slate-600 bg-slate-900/50 px-3 py-2 text-sm outline-none ring-sky-400 focus:ring"
+                >
+                  <option value="public">public</option>
+                  <option value="private">private</option>
+                </select>
+                <span className="text-xs text-slate-500">
+                  Public strategies can be discovered and cloned. Private strategies still run but are not cloneable.
+                </span>
+              </label>
 
-          <label className="grid gap-1.5 text-sm text-slate-300">
-            <span className="text-xs uppercase tracking-wider text-slate-500">Notes</span>
-            <input
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="optional notes about your hypothesis"
-              className="rounded-md border border-slate-600 bg-slate-900/50 px-3 py-2 text-sm outline-none ring-sky-400 focus:ring"
-            />
-          </label>
-        </div>
+              <label className="grid gap-1.5 text-sm text-slate-300">
+                <span className="text-xs uppercase tracking-wider text-slate-500">Notes</span>
+                <input
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  placeholder="optional notes about your hypothesis"
+                  className="rounded-md border border-slate-600 bg-slate-900/50 px-3 py-2 text-sm outline-none ring-sky-400 focus:ring"
+                />
+              </label>
+            </div>
+          </>
+        )}
 
         <div className="flex flex-wrap items-center gap-3">
           <button
@@ -228,11 +299,6 @@ export function DeployPage() {
             {submitState.kind === "loading" ? "Submitting..." : "Submit Config"}
           </button>
 
-          {submitState.kind === "ok" && (
-            <span className="text-sm text-emerald-300">
-              Submitted as <span className="font-mono">{submitState.submissionId}</span>
-            </span>
-          )}
           {submitState.kind === "error" && <span className="text-sm text-rose-300">{submitState.message}</span>}
         </div>
       </form>
