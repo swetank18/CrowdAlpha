@@ -61,7 +61,7 @@ export const OrderBook = memo(function OrderBook() {
     }))
   );
 
-  const { bidRows, askRows, maxQty } = useMemo(() => {
+  const { bidRows, askRows, maxQty, hasBids, hasAsks } = useMemo(() => {
     const bidSlice = bids.slice(0, VISIBLE_LEVELS);
     const askSlice = asks.slice(0, VISIBLE_LEVELS);
     const max = Math.max(
@@ -73,6 +73,8 @@ export const OrderBook = memo(function OrderBook() {
       bidRows: padLevels(bidSlice, VISIBLE_LEVELS),
       askRows: padLevels(askSlice, VISIBLE_LEVELS),
       maxQty: max,
+      hasBids: bidSlice.length > 0,
+      hasAsks: askSlice.length > 0,
     };
   }, [bids, asks]);
 
@@ -97,6 +99,11 @@ export const OrderBook = memo(function OrderBook() {
             .map((row, idx) => (
               <DepthRow key={`bid-${idx}`} level={row} side="bid" maxQty={maxQty} />
             ))}
+          {!hasBids && (
+            <div className="mt-2 rounded border border-rose-900/60 bg-rose-900/15 px-2 py-1 text-center text-[10px] font-semibold tracking-wider text-rose-300">
+              NO BIDS
+            </div>
+          )}
         </div>
 
         <div className="space-y-1">
@@ -107,6 +114,11 @@ export const OrderBook = memo(function OrderBook() {
           {askRows.map((row, idx) => (
             <DepthRow key={`ask-${idx}`} level={row} side="ask" maxQty={maxQty} />
           ))}
+          {!hasAsks && (
+            <div className="mt-2 rounded border border-emerald-900/60 bg-emerald-900/15 px-2 py-1 text-center text-[10px] font-semibold tracking-wider text-emerald-300">
+              NO ASKS
+            </div>
+          )}
         </div>
       </div>
 

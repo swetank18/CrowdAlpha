@@ -55,23 +55,34 @@ class CrowdingMatrix:
 
         self._activity_weights = w.tolist()
 
-        # Agent-level crowding:
-        # Phi_i = (1/(N-1)) * sum_{j!=i} C_ij * w_j
-        # where w_j is recent trading volume share.
+        # Agent-level crowding as weighted off-diagonal mean against peers:
+        # Phi_i = sum_{j!=i} C_ij * w_j / sum_{j!=i} w_j
         phi = np.zeros(n, dtype=float)
         if n > 1:
             for i in range(n):
                 numer = float(np.sum(c[i, :] * w) - (c[i, i] * w[i]))
-                phi[i] = numer / float(n - 1)
+                denom = float(np.sum(w) - w[i])
+                phi[i] = numer / denom if denom > 1e-12 else 0.0
         self._agent_intensity = {
             aid: float(np.clip(phi[idx], -1.0, 1.0))
             for idx, aid in enumerate(self._agent_ids)
         }
 
-        if n == 1:
-            self._intensity = float(phi[0])
+        # Aggregate crowding intensity:
+        # weighted mean of upper-triangle off-diagonal similarities.
+        if n <= 1:
+            self._intensity = 0.0
         else:
-            self._intensity = float(np.mean(phi))
+            numer = 0.0
+            denom = 0.0
+            for i in range(n):
+                for j in range(i + 1, n):
+                    pair_w = float(w[i] * w[j])
+                    if pair_w <= 1e-12:
+                        continue
+                    numer += float(c[i, j]) * pair_w
+                    denom += pair_w
+            self._intensity = float(np.clip((numer / denom) if denom > 1e-12 else 0.0, -1.0, 1.0))
 
         self._intensity_history.append(self._intensity)
         if len(self._intensity_history) > 500:

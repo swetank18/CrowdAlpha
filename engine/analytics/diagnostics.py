@@ -60,7 +60,7 @@ class Diagnostics:
         self,
         window: int = 250,
         min_sharpe_ticks: int = 50,
-        ticks_per_year: float = 31_536_000.0,
+        ticks_per_year: float = 252.0,
     ) -> None:
         self.window = max(30, window)
         self.min_sharpe_ticks = max(50, int(min_sharpe_ticks))
@@ -177,19 +177,20 @@ class Diagnostics:
             return diag
 
         arr = np.array(hist, dtype=float)
+        # Tick-by-tick PnL changes; never use cumulative PnL levels as returns.
         rets = np.diff(arr)
         if len(rets) < self.min_sharpe_ticks:
             return diag
 
         mean_r = float(np.mean(rets))
         std_r = float(np.std(rets, ddof=1)) if len(rets) > 1 else 0.0
-        if std_r > 1e-9:
+        if std_r >= 1e-8:
             diag.sharpe = (mean_r / std_r) * float(np.sqrt(self.ticks_per_year))
 
         downside = rets[rets < 0.0]
         if len(downside) > 1:
             down_std = float(np.std(downside, ddof=1)) if len(downside) > 1 else 0.0
-            if down_std > 1e-9:
+            if down_std >= 1e-8:
                 diag.sortino = (mean_r / down_std) * float(np.sqrt(self.ticks_per_year))
 
         equity = arr

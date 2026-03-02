@@ -107,18 +107,38 @@ def test_agent_level_crowding_phi_matches_formula():
     cm.update(F, ids, activity_weights=[0.6, 0.3, 0.1])
     phi = cm.agent_intensity_map
 
-    # Phi_i = (1/(N-1)) * sum_{j!=i} C_ij * w_j
+    # Phi_i = sum_{j!=i} C_ij * w_j / sum_{j!=i} w_j
     # C from the chosen vectors:
     # [ [1, 1,-1],
     #   [1, 1,-1],
     #   [-1,-1,1] ]
-    assert abs(phi["a"] - 0.1) < 1e-6      # (1*0.3 + -1*0.1)/2
-    assert abs(phi["b"] - 0.25) < 1e-6     # (1*0.6 + -1*0.1)/2
-    assert abs(phi["c"] + 0.45) < 1e-6     # (-1*0.6 + -1*0.3)/2
+    assert abs(phi["a"] - 0.5) < 1e-6         # (1*0.3 + -1*0.1)/(0.3+0.1)
+    assert abs(phi["b"] - (5.0 / 7.0)) < 1e-6  # (1*0.6 + -1*0.1)/(0.6+0.1)
+    assert abs(phi["c"] + 1.0) < 1e-6         # (-1*0.6 + -1*0.3)/(0.6+0.3)
 
     mult = cm.impact_multipliers(kappa=2.0, min_mult=0.2, max_mult=6.0)
     assert mult["b"] > mult["a"] > 1.0
     assert mult["c"] < 1.0
+
+
+def test_aggregate_intensity_uses_weighted_upper_triangle_off_diagonal():
+    cm = CrowdingMatrix()
+    F = np.array(
+        [
+            [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],   # a
+            [0.0, 1.0, 0.0, 0.0, 0.0, 0.0],   # b
+            [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],   # c (aligned with a)
+        ]
+    )
+    ids = ["a", "b", "c"]
+    w = [0.5, 0.3, 0.2]
+    intensity = cm.update(F, ids, activity_weights=w)
+
+    # pair similarities:
+    # C_ab=0, C_ac=1, C_bc=0
+    # weighted upper-triangle mean = (0*0.15 + 1*0.10 + 0*0.06)/(0.15+0.10+0.06)
+    expected = 0.10 / 0.31
+    assert abs(intensity - expected) < 1e-9
 
 
 def test_cosine_similarity_is_pairwise_across_all_agents_not_strategy_buckets():

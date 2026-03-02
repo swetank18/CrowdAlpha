@@ -31,6 +31,15 @@ function getCanvasDims(el: HTMLDivElement | null) {
   return { width, height };
 }
 
+function hash01(seed: string) {
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i += 1) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return ((h >>> 0) % 10000) / 10000;
+}
+
 export const FactorSpace = memo(function FactorSpace() {
   const { factorSpace, agentStats, selectedPair } = useSimStore(
     useShallow((s) => ({
@@ -49,14 +58,35 @@ export const FactorSpace = memo(function FactorSpace() {
   }, [statsSource]);
 
   const points = useMemo<PlotPoint[]>(() => {
-    const raw = pointsSource.map((agent) => ({
-      agentId: agent.agent_id,
-      xRaw: agent.pca?.x ?? 0,
-      yRaw: agent.pca?.y ?? 0,
-      activity: agent.activity ?? 0.5,
-      strategy: strategyMap.get(agent.agent_id) ?? inferStrategy(agent.agent_id),
-    }));
+    const byId = new Map(pointsSource.map((agent) => [agent.agent_id, agent]));
+    const allIds = new Set<string>([
+      ...pointsSource.map((agent) => agent.agent_id),
+      ...statsSource.map((agent) => agent.agent_id),
+    ]);
+    const raw = Array.from(allIds).map((agentId) => {
+      const point = byId.get(agentId);
+      const px = point?.pca?.x;
+      const py = point?.pca?.y;
+      const hasPca = Number.isFinite(px) && Number.isFinite(py);
+      return {
+        agentId,
+        xRaw: hasPca ? Number(px) : hash01(`${agentId}:x`) * 2 - 1,
+        yRaw: hasPca ? Number(py) : hash01(`${agentId}:y`) * 2 - 1,
+        activity: point?.activity ?? 0.35,
+        strategy: strategyMap.get(agentId) ?? inferStrategy(agentId),
+      };
+    });
     if (raw.length === 0) return [];
+
+    // If PCA collapses to near-identical coordinates, spread points deterministically.
+    const xSpread = Math.max(...raw.map((p) => p.xRaw)) - Math.min(...raw.map((p) => p.xRaw));
+    const ySpread = Math.max(...raw.map((p) => p.yRaw)) - Math.min(...raw.map((p) => p.yRaw));
+    if (xSpread < 1e-6 && ySpread < 1e-6) {
+      for (const point of raw) {
+        point.xRaw = (hash01(`${point.agentId}:jx`) * 2 - 1) * 0.8;
+        point.yRaw = (hash01(`${point.agentId}:jy`) * 2 - 1) * 0.8;
+      }
+    }
 
     const maxAbsX = Math.max(0.001, ...raw.map((p) => Math.abs(p.xRaw)));
     const maxAbsY = Math.max(0.001, ...raw.map((p) => Math.abs(p.yRaw)));

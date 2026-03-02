@@ -66,6 +66,7 @@ class SimulationConfig:
     initial_cash:     float = 100_000.0
     eta:              float = 0.01    # market impact coefficient
     crowding_kappa:   float = 18.0    # impact amplification sensitivity to agent crowding
+    sharpe_ticks_per_year: float = 252.0  # financial annualization scale for diagnostics
     seed:             Optional[int]  = None
 
 
@@ -158,7 +159,7 @@ class Simulation:
         self.diagnostics      = Diagnostics(
             window=250,
             min_sharpe_ticks=50,
-            ticks_per_year=self._estimated_ticks_per_year(),
+            ticks_per_year=self.config.sharpe_ticks_per_year,
         )
         self.regime_detector  = RegimeDetector()
         self.fragility        = FragilityIndex()
@@ -675,15 +676,6 @@ class Simulation:
             return 0.0
         return float((buy - sell) / total)
 
-    def _estimated_ticks_per_year(self) -> float:
-        tick_ms = float(self.config.tick_delay_ms)
-        if tick_ms <= 0.0:
-            # When sim is configured as "as fast as possible", anchor annualization
-            # to the default research speed (100 ms/tick).
-            tick_ms = 100.0
-        ticks_per_second = 1000.0 / tick_ms
-        return ticks_per_second * 365.0 * 24.0 * 60.0 * 60.0
-
     def _print_crowding_debug(self, state: TickState) -> None:
         factor_names = state.factor_data.get("factor_names", [])
         agents = state.factor_data.get("agents", [])
@@ -734,6 +726,12 @@ if __name__ == "__main__":
     parser.add_argument("--mm", type=int, default=2, help="number of market makers")
     parser.add_argument("--rl", type=int, default=0, help="number of RL agents")
     parser.add_argument(
+        "--sharpe-ticks-per-year",
+        type=float,
+        default=252.0,
+        help="annualization scale used for Sharpe/Sortino diagnostics",
+    )
+    parser.add_argument(
         "--print-factors",
         action="store_true",
         help="print raw factor vectors and cosine diagnostics each tick",
@@ -745,6 +743,7 @@ if __name__ == "__main__":
         n_mean_reversion=args.rev,
         n_market_makers=args.mm,
         n_rl=args.rl,
+        sharpe_ticks_per_year=args.sharpe_ticks_per_year,
         seed=args.seed,
         tick_delay_ms=args.tick_delay,
     )
