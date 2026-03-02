@@ -8,6 +8,7 @@ import { API_BASE } from "../config";
 const SHARPE_WINDOW_TICKS = 50;
 const STARTING_CAPITAL = 100_000;
 const NEUTRAL_BAND = STARTING_CAPITAL * 0.001;
+const REORDER_INTERVAL_MS = 1200;
 
 type RuntimeAgent = {
   agent_id: string;
@@ -16,7 +17,7 @@ type RuntimeAgent = {
 };
 
 function fmt(value: number | null | undefined, digits = 2) {
-  if (value === null || value === undefined || Number.isNaN(value)) return "—";
+  if (value === null || value === undefined || Number.isNaN(value)) return "-";
   return value.toFixed(digits);
 }
 
@@ -79,9 +80,47 @@ export const Leaderboard = memo(function Leaderboard() {
   const crowding = crowdingData?.agent_ids.length ? crowdingData : MOCK_CROWDING;
   const [runtimeAgents, setRuntimeAgents] = useState<RuntimeAgent[]>([]);
 
-  const ranked = useMemo(() => {
+  const liveRanked = useMemo(() => {
     return [...stats].sort((a, b) => (b.sharpe ?? -Infinity) - (a.sharpe ?? -Infinity));
   }, [stats]);
+
+  const [ranked, setRanked] = useState<AgentStat[]>(liveRanked);
+  const pendingRankedRef = useRef<AgentStat[]>(liveRanked);
+  const lastCommitMsRef = useRef(0);
+  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    pendingRankedRef.current = liveRanked;
+    const now = Date.now();
+    const elapsed = now - lastCommitMsRef.current;
+    const forceCommit = lastCommitMsRef.current === 0 || liveRanked.length !== ranked.length;
+    if (forceCommit || elapsed >= REORDER_INTERVAL_MS) {
+      if (flushTimerRef.current) {
+        clearTimeout(flushTimerRef.current);
+        flushTimerRef.current = null;
+      }
+      lastCommitMsRef.current = now;
+      setRanked(liveRanked);
+      return;
+    }
+
+    if (flushTimerRef.current) return;
+    flushTimerRef.current = setTimeout(() => {
+      flushTimerRef.current = null;
+      lastCommitMsRef.current = Date.now();
+      setRanked(pendingRankedRef.current);
+    }, REORDER_INTERVAL_MS - elapsed);
+  }, [liveRanked, ranked.length]);
+
+  useEffect(
+    () => () => {
+      if (flushTimerRef.current) {
+        clearTimeout(flushTimerRef.current);
+        flushTimerRef.current = null;
+      }
+    },
+    []
+  );
 
   const exposures = useMemo(() => {
     const alignedAgents = crowding.agent_ids
@@ -129,13 +168,10 @@ export const Leaderboard = memo(function Leaderboard() {
       if (oldTop === undefined) continue;
       const delta = oldTop - top;
       if (Math.abs(delta) < 1) continue;
-      row.animate(
-        [
-          { transform: `translateY(${delta}px)` },
-          { transform: "translateY(0)" },
-        ],
-        { duration: 260, easing: "ease-out" }
-      );
+      row.animate([{ transform: `translateY(${delta}px)` }, { transform: "translateY(0)" }], {
+        duration: 260,
+        easing: "ease-out",
+      });
     }
     prevTop.current = nextTop;
   }, [ranked]);
@@ -144,7 +180,9 @@ export const Leaderboard = memo(function Leaderboard() {
     const runtime = runtimeById.get(agent.agent_id);
     const strategyType = runtime?.strategy_type ?? agent.strategy_type;
     const template = toTemplate(strategyType);
-    const lookback = Math.round(pickNumber(runtime?.config, ["lookback", "window", "slow_window", "fast_window"], 30));
+    const lookback = Math.round(
+      pickNumber(runtime?.config, ["lookback", "window", "slow_window", "fast_window"], 30)
+    );
     const aggression = pickNumber(runtime?.config, ["aggression", "entry_threshold", "half_spread"], 0.001);
     const positionSize = Math.round(pickNumber(runtime?.config, ["order_qty", "qty", "size"], 5));
 
