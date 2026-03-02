@@ -111,6 +111,7 @@ def list_strategies(request: Request):
                 "strategy_type": a.strategy_type,
                 "inventory": a.inventory,
                 "pnl": round(a.pnl, 2),
+                "config": a.config if isinstance(a.config, dict) else {},
             }
             for a in sim.agents
         ],

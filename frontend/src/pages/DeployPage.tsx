@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { API_BASE } from "../config";
 
 type Track = "beginner" | "intermediate" | "advanced";
@@ -36,6 +36,36 @@ export function DeployPage() {
   const [submitState, setSubmitState] = useState<SubmitState>({ kind: "idle" });
 
   const templateHelp = useMemo(() => TEMPLATE_HELP[template], [template]);
+
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const qTrack = q.get("track");
+    const qTemplate = q.get("template");
+    const qClone = q.get("clone");
+    const qLookback = q.get("lookback");
+    const qAgg = q.get("aggression");
+    const qPos = q.get("position_size");
+
+    if (qTrack === "beginner" || qTrack === "intermediate" || qTrack === "advanced") {
+      setTrack(qTrack);
+    }
+    if (qTemplate === "momentum" || qTemplate === "mean_reversion" || qTemplate === "market_maker") {
+      setTemplate(qTemplate);
+    }
+    if (qClone) setCloneSource(qClone);
+    if (qLookback) {
+      const v = Number(qLookback);
+      if (Number.isFinite(v)) setLookback(Math.max(5, Math.round(v)));
+    }
+    if (qAgg) {
+      const v = Number(qAgg);
+      if (Number.isFinite(v)) setAggressiveness(Math.max(0, v));
+    }
+    if (qPos) {
+      const v = Number(qPos);
+      if (Number.isFinite(v)) setPositionSize(Math.max(1, Math.round(v)));
+    }
+  }, []);
 
   function buildParameters() {
     if (track === "beginner") {
